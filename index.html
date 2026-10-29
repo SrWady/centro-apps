@@ -1,0 +1,134 @@
+<!doctype html>
+<!-- Lanzador. Página para ELEGIR app; NO es instalable a propósito (sin manifest ni apple-touch-icon):
+     en iPhone cada app instalada tiene su propio almacenamiento, y entrar a una app desde un lanzador instalado
+     dejaría los datos en un contenedor distinto del de la app instalada por separado. Autocontenida: sin CDN ni
+     archivos de shared/ para no depender de las apps. Rutas relativas (funciona en /<repo>/). -->
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0c11">
+<meta name="description" content="Elija una app: Gimnasio o Finanzas. Funcionan sin internet y guardan los datos solo en este celular.">
+<title>Gimnasio y Finanzas</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%230a0c11'/%3E%3Cpath d='M9 22V14M16 22V9M23 22V17' stroke='%23a98bff' stroke-width='4' stroke-linecap='round'/%3E%3C/svg%3E">
+<style>
+  :root {
+    --bg: #0a0c11; --surface-1: #12151c; --surface-2: #1a1e28; --line: rgba(255, 255, 255, .08); --line-strong: rgba(255, 255, 255, .18);
+    --text: #f3f5f9; --text-2: #b4bbcb; --text-3: #9aa3b6;
+    --gym: #a98bff; --fin: #35d0e6; --warn: #ffc247;
+    --font: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--bg); color-scheme: dark; -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0; min-height: 100vh; min-height: 100dvh; background: var(--bg); color: var(--text); font-family: var(--font);
+    font-size: 16px; line-height: 1.45;
+    padding: max(20px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(24px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  }
+  main { max-width: 560px; margin: 0 auto; display: flex; flex-direction: column; gap: 16px; }
+  h1 { margin: 8px 0 0; font-size: 28px; line-height: 1.15; font-weight: 700; letter-spacing: -.01em; }
+  .sub { margin: 0; color: var(--text-2); }
+  .cards { display: grid; gap: 14px; margin-top: 8px; }
+  .card {
+    --acento: var(--gym);
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px; min-height: 132px; padding: 20px;
+    background: var(--surface-1); border: 1px solid var(--line); border-radius: 24px; color: inherit; text-decoration: none;
+    box-shadow: inset 0 3px 0 var(--acento); transition: transform .18s ease, background-color .18s ease, border-color .18s ease;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .card--fin { --acento: var(--fin); }
+  .card:active { transform: scale(.985); background: var(--surface-2); }
+  .card:focus-visible { outline: 3px solid var(--acento); outline-offset: 3px; }
+  .card__icono { width: 72px; height: 72px; border-radius: 18px; background: linear-gradient(180deg, #242938, #0a0c11); display: grid; place-items: center; border: 1px solid var(--line-strong); }
+  .card__icono svg { width: 48px; height: 48px; }
+  .card__titulo { margin: 0; font-size: 22px; font-weight: 700; }
+  .card__desc { margin: 2px 0 0; color: var(--text-2); font-size: 14px; }
+  .card__flecha { color: var(--acento); width: 28px; height: 28px; }
+  .aviso { background: var(--surface-1); border: 1px solid var(--line); border-radius: 18px; padding: 16px; font-size: 14px; color: var(--text-2); }
+  .aviso h2 { margin: 0 0 6px; font-size: 16px; color: var(--text); }
+  .aviso ol { margin: 8px 0 0; padding-left: 22px; }
+  .aviso li + li { margin-top: 6px; }
+  .aviso b { color: var(--text); font-weight: 600; }
+  .aviso--fuerte { border-color: var(--warn); }
+  .estado { font-size: 14px; color: var(--text-3); min-height: 20px; margin: 0; }
+  [hidden] { display: none !important; }
+  @media (prefers-reduced-motion: reduce) { .card { transition: none; } }
+  @media (min-width: 640px) { .cards { grid-template-columns: 1fr 1fr; } .card { grid-template-columns: 1fr; justify-items: start; } .card__flecha { display: none; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Gimnasio y Finanzas</h1>
+    <p class="sub">Elija una app. Las dos funcionan sin internet.</p>
+  </header>
+
+  <nav class="cards" aria-label="Apps">
+    <a class="card" href="./gimnasio/">
+      <div class="card__icono" aria-hidden="true">
+        <svg viewBox="0 0 48 48" fill="#a98bff"><g transform="rotate(-40 24 24)"><rect x="9" y="22" width="30" height="4" rx="2"/><rect x="11" y="15" width="5" height="18" rx="2.5"/><rect x="32" y="15" width="5" height="18" rx="2.5"/><rect x="6" y="18" width="4" height="12" rx="2"/><rect x="38" y="18" width="4" height="12" rx="2"/></g></svg>
+      </div>
+      <div>
+        <h2 class="card__titulo">Gimnasio</h2>
+        <p class="card__desc">Rutina semanal, series y progreso</p>
+      </div>
+      <svg class="card__flecha" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+    </a>
+    <a class="card card--fin" href="./finanzas/">
+      <div class="card__icono" aria-hidden="true">
+        <svg viewBox="0 0 48 48" fill="none" stroke="#35d0e6" stroke-width="3" stroke-linecap="round"><circle cx="24" cy="24" r="19"/><path d="M17 31v-5M24 31V19M31 31v-9" stroke-width="5"/></svg>
+      </div>
+      <div>
+        <h2 class="card__titulo">Finanzas</h2>
+        <p class="card__desc">Presupuesto, deudas y metas</p>
+      </div>
+      <svg class="card__flecha" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 5l7 7-7 7"/></svg>
+    </a>
+  </nav>
+
+  <section class="aviso aviso--fuerte" id="aviso-instalada" hidden>
+    <h2>Está usando esta página instalada</h2>
+    <p style="margin:0">Esta página no debe instalarse: sus datos quedarían separados de los de cada app. Quítela de la pantalla de inicio e instale <b>Gimnasio</b> y <b>Finanzas</b> por separado, como se explica abajo.</p>
+  </section>
+
+  <section class="aviso" aria-labelledby="t-instalar">
+    <h2 id="t-instalar">Instale cada app desde su propia página</h2>
+    <ol>
+      <li>Toque una tarjeta y espere a que abra (la primera vez, con internet).</li>
+      <li><b>iPhone (Safari):</b> Compartir &rarr; &laquo;Agregar a pantalla de inicio&raquo;. <b>Samsung (Chrome):</b> menú &#8942; &rarr; &laquo;Instalar app&raquo; o &laquo;Agregar a pantalla de inicio&raquo;.</li>
+      <li><b>Instálela antes de guardar datos:</b> en iPhone, Safari y la app instalada guardan los datos por separado.</li>
+    </ol>
+    <p style="margin:10px 0 0">No instale esta página de inicio: instale <b>Gimnasio</b> y <b>Finanzas</b> por separado, cada una con su propio ícono.</p>
+  </section>
+
+  <section class="aviso">
+    <b>Sus datos viven solo en este celular.</b> Si borra los datos del navegador se pierden. Para cambiar de celular use Ajustes &rarr; &laquo;Pasar datos a otro celular&raquo; dentro de cada app.
+  </section>
+
+  <p class="estado" id="estado" role="status" aria-live="polite"></p>
+</main>
+<script>
+(function () {
+  'use strict';
+  var estado = document.getElementById('estado');
+  function pintarRed() {
+    estado.textContent = navigator.onLine === false ? 'Sin conexión: las apps que ya abrió antes siguen funcionando.' : '';
+  }
+  window.addEventListener('online', pintarRed);
+  window.addEventListener('offline', pintarRed);
+  pintarRed();
+  try {
+    if (window.navigator.standalone === true || (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)) {
+      document.getElementById('aviso-instalada').hidden = false;
+    }
+  } catch (e) { /* sin acción */ }
+  if ('serviceWorker' in navigator) {
+    window.addEventListener('load', function () {
+      try { navigator.serviceWorker.register('./sw.js', { scope: './' }).catch(function () {}); } catch (e) { /* sin acción */ }
+    });
+  }
+})();
+</script>
+</body>
+</html>
