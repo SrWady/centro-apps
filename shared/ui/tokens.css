@@ -1,0 +1,146 @@
+/*
+ * TOKENS DEL SISTEMA DE DISEÑO — Centro de Entrenamiento + Finanzas Personales
+ * Tema oscuro como base. Contraste AA verificado con tools/contraste.mjs.
+ * Acento por app: <html data-app="gimnasio"> o <html data-app="finanzas">.
+ * Sin fuentes remotas: pila de fuentes del sistema.
+ */
+:root {
+  color-scheme: dark;
+
+  /* Superficies (de más profunda a más elevada) */
+  --bg: #0a0c11;
+  --surface-1: #12151c;
+  --surface-2: #1a1e28;
+  --surface-3: #242938;
+  --surface-4: #2f3547;
+  --line: rgba(255, 255, 255, 0.08);
+  --line-strong: rgba(255, 255, 255, 0.18);
+  --scrim: rgba(3, 5, 9, 0.66);
+
+  /* Texto */
+  --text: #f3f5f9;
+  --text-2: #b4bbcb;
+  --text-3: #9aa3b6;
+
+  /* Acento (por defecto: Gimnasio) */
+  --accent: #a98bff;
+  --accent-hover: #bba3ff;
+  --accent-pressed: #8f6df5;
+  --accent-ink: #120b2b;
+  --accent-soft: rgba(169, 139, 255, 0.16);
+  --accent-line: rgba(169, 139, 255, 0.42);
+
+  /* Semánticos (cada uno con relleno suave y tinta para texto sobre el relleno) */
+  --ok: #3ddc97;
+  --ok-soft: rgba(61, 220, 151, 0.15);
+  --warn: #ffc247;
+  --warn-soft: rgba(255, 194, 71, 0.15);
+  --danger: #ff7a88;
+  --danger-soft: rgba(255, 122, 136, 0.15);
+  --info: #6cb6ff;
+  --info-soft: rgba(108, 182, 255, 0.15);
+  --on-semantic: #0a0c11;
+
+  /* Series para gráficos (siempre acompañadas de etiqueta/leyenda, nunca solo color) */
+  --series-1: var(--accent);
+  --series-2: #ffb454;
+  --series-3: #6cb6ff;
+  --series-4: #3ddc97;
+  --series-muted: #6b7488;
+
+  /* Categorías 50/30/20 (Finanzas) */
+  --cat-needs: #6c8cff;
+  --cat-wants: #ffa45c;
+  --cat-save: #3ddc97;
+  --cat-free: #6b7488;
+
+  /* Tipografía: pila del sistema (offline) */
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --fs-xs: 0.75rem;   /* 12 */
+  --fs-sm: 0.875rem;  /* 14 */
+  --fs-md: 1rem;      /* 16 */
+  --fs-lg: 1.125rem;  /* 18 */
+  --fs-xl: 1.375rem;  /* 22 */
+  --fs-2xl: 1.75rem;  /* 28 */
+  --fs-3xl: 2.25rem;  /* 36 */
+  --fs-4xl: 2.875rem; /* 46 */
+  --lh-tight: 1.15;
+  --lh-base: 1.4;
+  --fw-regular: 400;
+  --fw-medium: 500;
+  --fw-semibold: 600;
+  --fw-bold: 700;
+
+  /* Espaciado (cuadrícula de 4 px) */
+  --sp-1: 4px;
+  --sp-2: 8px;
+  --sp-3: 12px;
+  --sp-4: 16px;
+  --sp-5: 20px;
+  --sp-6: 24px;
+  --sp-8: 32px;
+  --sp-10: 40px;
+  --sp-12: 48px;
+
+  /* Radios */
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
+  --r-xl: 28px;
+  --r-pill: 999px;
+
+  /* Sombras */
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.45);
+  --shadow-2: 0 8px 24px rgba(0, 0, 0, 0.45);
+  --shadow-sheet: 0 -12px 40px rgba(0, 0, 0, 0.6);
+  --shadow-fab: 0 8px 20px rgba(0, 0, 0, 0.5);
+
+  /* Movimiento */
+  --dur-fast: 120ms;
+  --dur: 220ms;
+  --dur-slow: 480ms;
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
+
+  /* Táctil y layout */
+  --tap: 44px;          /* mínimo de cualquier elemento interactivo */
+  --btn-h: 48px;
+  --nav-h: 60px;
+  --topbar-h: 52px;
+  --gutter: 16px;
+  --content-max: 560px;
+
+  /* Safe-area: en dispositivos reales vienen de env(); las maquetas pueden simularlas */
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --nav-total: calc(var(--nav-h) + var(--safe-bottom));
+
+  /* Capas */
+  --z-nav: 10;
+  --z-float: 20;
+  --z-sheet: 100;
+  --z-toast: 200;
+}
+
+/* Acento por app: misma identidad (superficies, formas, tipografía), distinto color de marca */
+:root[data-app="gimnasio"] {
+  --accent: #a98bff;
+  --accent-hover: #bba3ff;
+  --accent-pressed: #8f6df5;
+  --accent-ink: #120b2b;
+  --accent-soft: rgba(169, 139, 255, 0.16);
+  --accent-line: rgba(169, 139, 255, 0.42);
+}
+:root[data-app="finanzas"] {
+  --accent: #35d0e6;
+  --accent-hover: #6adff0;
+  --accent-pressed: #1fb4cb;
+  --accent-ink: #04222a;
+  --accent-soft: rgba(53, 208, 230, 0.15);
+  --accent-line: rgba(53, 208, 230, 0.42);
+}

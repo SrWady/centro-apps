@@ -1,0 +1,68 @@
+/*
+ * PATRONES — Finanzas. Requiere tokens.css y components.css.
+ */
+
+/* Importes con signo */
+.money { font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); white-space: nowrap; }
+.money--pos { color: var(--ok); }
+.money--neg { color: var(--text); }
+.money--debt { color: var(--danger); }
+
+/* Hero de disponible */
+.hero { display: flex; flex-direction: column; gap: var(--sp-2); }
+.hero__amount { font-size: var(--fs-4xl); font-weight: var(--fw-bold); letter-spacing: -0.02em; font-variant-numeric: tabular-nums; line-height: 1.05; }
+.hero__row { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); flex-wrap: wrap; }
+.hero__calc { font-size: var(--fs-xs); color: var(--text-2); }
+
+/* Alertas en fila */
+.alert { display: flex; align-items: center; gap: var(--sp-3); min-height: 56px; padding: var(--sp-2) var(--sp-4); border-radius: var(--r-md); background: var(--surface-1); border: 1px solid var(--line); text-decoration: none; }
+.alert__icon { flex: none; display: grid; place-items: center; width: 36px; height: 36px; border-radius: var(--r-sm); }
+.alert--warn .alert__icon { background: var(--warn-soft); color: var(--warn); }
+.alert--info .alert__icon { background: var(--info-soft); color: var(--info); }
+.alert--danger .alert__icon { background: var(--danger-soft); color: var(--danger); }
+.alert__txt { flex: 1; min-width: 0; font-size: var(--fs-sm); }
+.alert__txt b { display: block; font-size: var(--fs-md); font-weight: var(--fw-semibold); }
+
+/* Dona 50/30/20 */
+.split-card { display: flex; flex-direction: column; align-items: center; gap: var(--sp-4); }
+.split-card .legend { width: 100%; }
+.legend__pct { font-variant-numeric: tabular-nums; font-weight: var(--fw-semibold); }
+.legend__meta { font-size: var(--fs-xs); color: var(--text-3); display: block; }
+.dot-cat { flex: none; width: 10px; height: 10px; border-radius: 3px; background: var(--sw); }
+
+/* Movimientos */
+.txn-day { display: flex; align-items: baseline; justify-content: space-between; padding: var(--sp-4) 0 var(--sp-1); }
+.txn { display: flex; align-items: center; gap: var(--sp-3); min-height: 60px; padding: 8px 0; border-top: 1px solid var(--line); width: 100%; background: none; border-left: 0; border-right: 0; border-bottom: 0; text-align: left; }
+.txn-list > .txn:first-of-type { border-top: 0; }
+.txn__icon { flex: none; display: grid; place-items: center; width: 40px; height: 40px; border-radius: 12px; background: var(--surface-3); background: color-mix(in srgb, var(--sw, var(--text-3)) 18%, transparent); color: var(--sw, var(--text-2)); }
+.txn__main { flex: 1; min-width: 0; }
+.txn__title { font-weight: var(--fw-medium); overflow-wrap: anywhere; }
+.txn__sub { font-size: var(--fs-sm); color: var(--text-2); }
+.searchbar { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--btn-h); padding: 0 var(--sp-4); border-radius: var(--r-md); background: var(--surface-2); color: var(--text-3); }
+.searchbar input { flex: 1; min-width: 0; min-height: var(--tap); border: 0; background: none; outline: none; color: var(--text); }
+.searchbar input::placeholder { color: var(--text-3); }
+
+/* Presupuesto */
+.budget-group { padding: var(--sp-4); }
+.budget-group__head { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-3); margin-bottom: var(--sp-2); }
+.budget-group__title { display: flex; align-items: center; gap: var(--sp-2); font-weight: var(--fw-bold); }
+.budget-line { display: flex; flex-direction: column; gap: 6px; padding: var(--sp-3) 0; border-top: 1px solid var(--line); min-height: 56px; }
+.budget-line:first-of-type { border-top: 0; }
+.budget-line__row { display: flex; justify-content: space-between; gap: var(--sp-3); align-items: baseline; }
+.budget-line__name { font-weight: var(--fw-medium); overflow-wrap: anywhere; }
+.budget-line__amt { font-size: var(--fs-sm); color: var(--text-2); font-variant-numeric: tabular-nums; text-align: right; }
+.progress-label { display: flex; justify-content: space-between; font-size: var(--fs-xs); color: var(--text-2); }
+
+/* Deudas, metas, cuentas */
+.debt__top { display: flex; justify-content: space-between; align-items: flex-start; gap: var(--sp-3); }
+.debt__facts { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-3); margin-top: var(--sp-3); }
+.fact { display: flex; flex-direction: column; gap: 2px; }
+.fact__l { font-size: var(--fs-xs); color: var(--text-3); }
+.fact__v { font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+.compare__col { padding: var(--sp-3); border-radius: var(--r-md); background: var(--surface-2); border: 1px solid transparent; }
+.compare__col--best { border-color: var(--ok); background: var(--ok-soft); }
+.goal { display: grid; grid-template-columns: auto 1fr; gap: var(--sp-4); align-items: center; }
+.acct-total { display: grid; grid-template-columns: 1fr 1fr; gap: var(--sp-3); }
+.networth { text-align: center; padding: var(--sp-2) 0; }
+.cat-bar { display: flex; flex-direction: column; gap: 6px; padding: var(--sp-2) 0; }
