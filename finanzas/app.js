@@ -43,7 +43,7 @@ const PESTANAS = [
   { ruta: 'deudas', titulo: 'Deudas', icono: 'card' },
 ];
 const EN_MAS = [
-  { ruta: 'metas', titulo: 'Metas', sub: 'Fondo de emergencia y más', icono: 'target' },
+  { ruta: 'metas', titulo: 'Metas de ahorro', sub: 'Viaje, vehículo, fondo de emergencia…', icono: 'target' },
   { ruta: 'cuentas', titulo: 'Cuentas', sub: 'Saldos y patrimonio neto', icono: 'wallet' },
   { ruta: 'reportes', titulo: 'Reportes', sub: 'Categorías, tendencia y ahorro', icono: 'bars' },
   { ruta: 'ajustes', titulo: 'Ajustes', sub: 'Ingreso, día de pago y datos', icono: 'sliders' },

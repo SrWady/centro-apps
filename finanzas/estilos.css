@@ -24,3 +24,13 @@ button.alert { width: 100%; text-align: left; color: inherit; font: inherit; cur
 /* Tres steppers (necesidades/gustos/ahorro): pasan a 2 filas si no caben (cada uno necesita ~130 px) */
 .grid-steppers { display: grid; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); gap: var(--sp-3); }
 .grid-steppers > * { min-width: 0; }
+
+/* R-USR-02: con un título de hoja largo ("Editar" + un nombre de 40 letras) la cabecera flex encogía el botón Cerrar (37 px). El botón no se
+   encoge (mínimo 44 × 44) y el título se recorta con puntos suspensivos; el nombre completo sigue en el nombre accesible de la hoja. Regla
+   local de Finanzas: el componente compartido (shared/ui) y Gimnasio no cambian. */
+.sheet__head .icon-btn { flex: none; min-width: var(--tap); min-height: var(--tap); }
+.sheet__title { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* R-FIN-01: en una confirmación de riesgo (sobregiro, borrar el ingreso que financió una transferencia…) el botón de confirmar nace deshabilitado ~700 ms
+   (aria-disabled="true"); se ve apagado y gris. El cambio de estado es instantáneo: sin transición ni animación (vale con prefers-reduced-motion). */
+.sheet__foot .btn[aria-disabled="true"] { opacity: 0.45; filter: grayscale(0.7); cursor: not-allowed; transition: none; animation: none; }
