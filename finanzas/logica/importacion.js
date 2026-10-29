@@ -17,6 +17,7 @@ const CAMPOS = {
   rango: 'rango', frecuencia: 'frecuencia', 'frecuencia.tipo': 'frecuencia', 'frecuencia.dia': 'día del mes', 'frecuencia.diaSemana': 'día de la semana', desde: 'fecha de inicio', activo: 'activo',
   ingresoPlaneado: 'ingreso planeado', asignaciones: 'asignaciones', pagoDeudasFijo: 'pago de deudas fijado a mano', pagoDeudasCongelado: 'pago de deudas congelado', sinSalario: 'ciclo sin salario',
   montoMensual: 'monto mensual', variable: 'ingreso variable', avisoPct: 'porcentaje de aviso', excesoPct: 'porcentaje de exceso', desdeCiclo: 'ciclo desde el que rige', dia: 'día',
+  color: 'color', cupo: 'cupo',
   cicloInicial: 'ciclo inicial', metaGrupos: 'reparto 50/30/20', alertas: 'alertas',
 };
 const RAIZ = {

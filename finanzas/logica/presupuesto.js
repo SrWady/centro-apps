@@ -10,7 +10,7 @@
  * siempre `pagoDeudasCalculado`; los ciclos cerrados conservan lo guardado (`alAbrir` lo congela al abrir el ciclo siguiente).
  *
  * Ahorro (N-06): "Ahorro y metas ejecutado" tiene UNA sola definición en Inicio, Presupuesto y Reportes: aportes a metas + capital del abono
- * extra a deudas. Los intereses de un abono NO son ahorro: se cuentan como consumo, o sea en la línea "Pago de deudas" (el efectivo
+ * extra a deudas (RU-02: un GASTO en una categoría de ahorro propia es consumo y no suma aquí; ver `grupos.ahorro.consumoPropias`). Los intereses de un abono NO son ahorro: se cuentan como consumo, o sea en la línea "Pago de deudas" (el efectivo
  * que sale del bolsillo no cambia: `totalEjecutado` y `disponible` siguen siendo de caja). Ver `ejecutadoPorCategoria`.
  *
  * Ingreso base (N-08, R3F-04): la base del ciclo es el SALARIO (o ingreso mensual) recibido: Presupuesto, Inicio y Reportes usan ese real
@@ -37,6 +37,15 @@ import { sumarDias } from '../../shared/lib/fechas.js';
 import { calcularSaldos } from './saldos.js';
 import { ocurrenciasCuota } from './recurrentes.js';
 import { GRUPOS, MAX_PESOS, esCicloRazonable } from './esquema.js';
+
+/**
+ * ¿La categoría de gasto cuenta como CONSUMO (aparece en "Gasto por categoría" y en la tendencia de gasto)? Sí: necesidades, gustos y las
+ * categorías de ahorro que el usuario creó y a las que registra gastos. No: las que se llenan con ahorro (el vínculo 'metas', el abono
+ * extra a deudas y la barra de una meta, que reciben aportes): eso se reporta aparte como ahorro (RONDA-USUARIO-A).
+ */
+export function esCategoriaDeConsumo(c) {
+  return c.tipo === 'gasto' && (c.grupo !== 'ahorro' || (c.vinculo === null && !c.metaId));
+}
 
 /**
  * Ejecutado neto por categoría de gasto en el rango (gasto + pagoDeuda + aporteMeta − retiroMeta), mostrado como máx(0, ·).
@@ -125,6 +134,9 @@ export function alertaCategoria(asignado, ejecutado, { avisoPct, excesoPct }) {
 /**
  * Detalle del "Pago de deudas" calculado de un ciclo (H2): una fila por deuda no archivada con saldo > 0 al inicio del ciclo,
  * con min(cuota, saldo). Es la fuente tanto de la cifra como del texto que la explica (H-04: deben coincidir).
+ * RU-06: una deuda ARCHIVADA sigue en el calculado del ciclo en que ya se le hizo un pago (la cuota pagada —categoría «Pago de deudas»— cuenta: si no, al archivar la tarjeta
+ * con la cuota del ciclo ya pagada, lo asignado bajaba y "Pago de deudas" quedaba en "exceso" sin razón); en el ciclo siguiente, sin pagos, deja de
+ * presupuestarse.
  * @returns {Array<{deuda:object, monto:number}>}
  */
 export function detallePagoDeudas(datos, ciclo) {
@@ -132,8 +144,19 @@ export function detallePagoDeudas(datos, ciclo) {
   const saldos = calcularSaldos(datos, sumarDias(rango.inicio, -1));
   const saldosNacidos = new Map(); // saldos al cierre de cada fecha de saldo inicial: solo se calculan si hay una deuda nacida en este ciclo
   const filas = [];
+  let archivadasConPago = null; // Set de ids de deudas archivadas con un pago en el ciclo (se calcula solo si hay archivadas)
   for (const d of datos.deudas) {
-    if (d.archivada) continue;
+    if (d.archivada) {
+      if (archivadasConPago === null) {
+        const archivadas = new Set(datos.deudas.filter((x) => x.archivada).map((x) => x.id));
+        archivadasConPago = new Set();
+        const lineaCuotas = datos.categorias.find((c) => c.vinculo === 'cuotas-deudas');
+        for (const m of datos.movimientos) if (m.tipo === 'pagoDeuda' && lineaCuotas && m.categoriaId === lineaCuotas.id && archivadas.has(m.deudaId) && m.fecha >= rango.inicio && m.fecha <= rango.fin) archivadasConPago.add(m.deudaId);
+      }
+      const sa = saldos.deudas[d.id];
+      if (archivadasConPago.has(d.id) && sa > 0) filas.push({ deuda: d, monto: Math.min(d.cuota, sa) });
+      continue;
+    }
     const s = saldos.deudas[d.id];
     if (s > 0) filas.push({ deuda: d, monto: Math.min(d.cuota, s) });
     else if (d.fechaSaldoInicial >= rango.inicio && d.fechaSaldoInicial <= rango.fin && ocurrenciasCuota(d, rango).length > 0) {
@@ -179,15 +202,21 @@ export function resumenCiclo(datos, ciclo, hasta) {
   const totalAsignado = Object.values(asignaciones).reduce((s, v) => s + v, 0);
   const totalEjecutado = Object.values(ejecutado).reduce((s, v) => s + v, 0);
 
+  const gastado = datos.categorias.filter(esCategoriaDeConsumo).reduce((s, c) => s + (ejecutado[c.id] ?? 0), 0);
   const grupos = {};
   for (const g of GRUPOS) {
     const cats = datos.categorias.filter((c) => c.tipo === 'gasto' && c.grupo === g);
     const asignado = cats.reduce((s, c) => s + (asignaciones[c.id] ?? 0), 0);
-    const ejec = cats.reduce((s, c) => s + (ejecutado[c.id] ?? 0), 0);
+    // RU-02: un gasto cargado a una categoría de Ahorro PROPIA (p. ej. "Vacaciones") es CONSUMO (reduce la tasa de ahorro) y NO suma al "ahorro y
+    // metas ejecutado": ese grupo solo cuenta aportes a metas y capital del abono extra. Su barra de categoría sigue mostrando lo gastado de su monto
+    // asignado, y el grupo lo muestra aparte (`consumoPropias`); `restante` descuenta ambos.
+    const consumoPropias = g === 'ahorro' ? cats.filter(esCategoriaDeConsumo).reduce((s, c) => s + (ejecutado[c.id] ?? 0), 0) : 0;
+    const ejec = cats.reduce((s, c) => s + (ejecutado[c.id] ?? 0), 0) - consumoPropias;
     grupos[g] = {
       asignado,
       ejecutado: ejec,
-      restante: asignado - ejec,
+      consumoPropias,
+      restante: asignado - ejec - consumoPropias,
       asignadoPct: base.monto > 0 ? asignado / base.monto : null,
       ejecutadoPct: base.monto > 0 ? ejec / base.monto : null,
       meta: datos.ajustes.metaGrupos[g],
@@ -231,6 +260,7 @@ export function resumenCiclo(datos, ciclo, hasta) {
     sinSalario: presupuesto !== null && presupuesto.sinSalario === true,
     ejecutado,
     totalEjecutado,
+    gastado,
     disponible: base.monto + ingresoOtros - totalEjecutado, // R3F-04: los otros ingresos suman al disponible sin redefinir la base
     grupos,
     lineas,

@@ -12,7 +12,7 @@
 import { listarCiclos, rangoCiclo } from '../../shared/lib/ciclos.js';
 import { calcularSaldos, patrimonioNeto } from './saldos.js';
 import { estadoCiclo } from './periodo.js';
-import { resumenCiclo } from './presupuesto.js';
+import { esCategoriaDeConsumo, resumenCiclo } from './presupuesto.js';
 
 /** Flujos del ciclo desde los movimientos (sin recortes por categoría). */
 export function flujosDelCiclo(datos, rango, hasta) {
@@ -69,21 +69,25 @@ export function tasaDeAhorro(datos, ciclo, hasta) {
 }
 
 /**
- * Gasto por categoría sumando los ciclos dados (necesidades + gustos; el ahorro se reporta aparte), de mayor a menor.
- * @returns {{total:number, filas:Array<{categoria, monto:number, fraccion:number}>}}
+ * Gasto por categoría sumando los ciclos dados (necesidades + gustos + las categorías de ahorro propias del usuario; los aportes a metas y el
+ * abono extra se reportan aparte como ahorro), de mayor a menor.
+ * `sinGastos` = categorías creadas por el usuario (campo `creadaEn`), activas, que no tuvieron gastos en esos ciclos: así una categoría nueva
+ * se ve en el reporte desde el primer día aunque todavía no tenga movimientos.
+ * @returns {{total:number, filas:Array<{categoria, monto:number, fraccion:number}>, sinGastos:Array<object>}}
  */
 export function gastoPorCategoria(datos, ciclos, hasta) {
   const montos = {};
   for (const ciclo of ciclos) {
     const r = resumenCiclo(datos, ciclo, hasta);
-    for (const l of r.lineas) if (l.categoria.grupo !== 'ahorro') montos[l.categoria.id] = (montos[l.categoria.id] ?? 0) + l.ejecutado;
+    for (const l of r.lineas) if (esCategoriaDeConsumo(l.categoria)) montos[l.categoria.id] = (montos[l.categoria.id] ?? 0) + l.ejecutado;
   }
   const filas = datos.categorias
     .filter((c) => montos[c.id] > 0)
     .map((categoria) => ({ categoria, monto: montos[categoria.id] }))
     .sort((a, b) => b.monto - a.monto || a.categoria.orden - b.categoria.orden);
   const total = filas.reduce((s, f) => s + f.monto, 0);
-  return { total, filas: filas.map((f) => ({ ...f, fraccion: total > 0 ? f.monto / total : 0 })) };
+  const sinGastos = datos.categorias.filter((c) => esCategoriaDeConsumo(c) && c.creadaEn !== undefined && !c.archivada && !(montos[c.id] > 0)).sort((a, b) => a.orden - b.orden);
+  return { total, filas: filas.map((f) => ({ ...f, fraccion: total > 0 ? f.monto / total : 0 })), sinGastos };
 }
 
 /** Últimos `n` ciclos (≥ ciclo inicial) hasta el actual, de más antiguo a más reciente. */
@@ -114,7 +118,7 @@ export function tendencia(datos, hoy, n = 6) {
       dias: rango.dias,
       transicion: r.sinSalario || rango.dias < DIAS_CICLO_CORTO,
       ingreso: f.ingreso,
-      gastado: r.grupos.necesidades.ejecutado + r.grupos.gustos.ejecutado,
+      gastado: r.gastado, // necesidades + gustos + categorías de ahorro propias con gastos (lo mismo que "Gasto por categoría")
       consumo: f.consumo,
       ahorro: f.ingreso - f.consumo,
       tasa: f.ingreso > 0 ? (f.ingreso - f.consumo) / f.ingreso : null,

@@ -7,14 +7,14 @@
  * Las acciones de alto impacto estructural (cuentas, deudas, categorías, recurrentes, metas) revalidan el conjunto con
  * validar() antes de devolver; las de movimientos validan solo el movimiento (ruta caliente) y su unicidad de origen.
  */
-import { cicloDe, listarCiclos, rangoCiclo } from '../../shared/lib/ciclos.js';
+import { cicloDe, cicloSiguiente, listarCiclos, rangoCiclo } from '../../shared/lib/ciclos.js';
 import { esFechaISO, crearContexto, esPesosValido } from '../../shared/lib/validacion.js';
-import { claveOrigen, crearReferencias, esCicloRazonable, MAX_PESOS, MENSAJE_CICLO_RANGO, mensajeNumeroSensible, mensajePesos, tieneNumeroLargo, validar, validarMovimiento } from './esquema.js';
+import { claveOrigen, COLORES_META, crearReferencias, esCicloRazonable, GRUPOS, MAX_PESOS, MENSAJE_CICLO_RANGO, mensajeNumeroSensible, mensajePesos, tieneNumeroLargo, validar, validarMovimiento } from './esquema.js';
 import { cuotaPropuesta } from './deudas.js';
 import { crearPresupuestoCopia, pagoDeudasCalculado } from './presupuesto.js';
 import { clavesUsadas, indiceOrigenes, ocurrenciaExiste, ocurrenciaPendiente, ocurrenciasCuota, ocurrenciasRecurrente } from './recurrentes.js';
 import { calcularSaldos } from './saldos.js';
-import { maximoRetirable, saldoMinimoMeta } from './metas.js';
+import { barraDeMeta, categoriaDeMeta, categoriaParaAporte, maximoRetirable, saldoMinimoMeta } from './metas.js';
 import { formatearPesos } from '../../shared/lib/dinero.js';
 import { formatearFecha } from '../../shared/lib/fechas.js';
 import { aplicarDiaPago, estadoCiclo, fechaPorDefecto } from './periodo.js';
@@ -127,6 +127,11 @@ function rechazarNumerosLargos(...textos) {
 
 function construirMovimiento(datos, crudo) {
   rechazarNumerosLargos(crudo.nota);
+  // RONDA-USUARIO-A: un aporte o retiro consume UNA sola categoría: la barra propia de la meta o, si no tiene, "Ahorro y metas".
+  if ((crudo.tipo === 'aporteMeta' || crudo.tipo === 'retiroMeta') && typeof crudo.metaId === 'string') {
+    const categoriaId = categoriaParaAporte(datos, crudo.metaId, crudo.categoriaId);
+    if (categoriaId) crudo = { ...crudo, categoriaId };
+  }
   const c = crearContexto();
   const m = validarMovimiento(crudo, crearReferencias(datos), c, 'movimiento');
   if (c.errores.length || !m) throw primerError(c.errores);
@@ -235,6 +240,81 @@ function exigirDeudaNoNegativa(datos, despues, pago, hoy) {
     : `${deuda.nombre} no tiene saldo pendiente a esa fecha: no hay nada que pagar.${pago.interes > 0 ? ' Si es un pago de intereses, regístralo como gasto.' : ''}${aclaracion}`, 'deuda-saldada');
 }
 
+/**
+ * Ronda del usuario B: efecto de un movimiento en el saldo de UNA cuenta (no crédito); mismo criterio que `calcularSaldos` (saldos.js).
+ */
+function efectoEnCuenta(m, cuentaId) {
+  switch (m.tipo) {
+    case 'gasto': case 'pagoDeuda': return m.cuentaId === cuentaId ? -m.monto : 0;
+    case 'ingreso': case 'ajusteCuenta': return m.cuentaId === cuentaId ? m.monto : 0;
+    case 'transferencia': return (m.cuentaId === cuentaId ? -m.monto : 0) + (m.cuentaDestinoId === cuentaId ? m.monto : 0);
+    case 'aporteMeta': case 'retiroMeta': return m.cuentaDestinoId ? (m.cuentaId === cuentaId ? -m.monto : 0) + (m.cuentaDestinoId === cuentaId ? m.monto : 0) : 0;
+    default: return 0;
+  }
+}
+
+/** Saldo de la cuenta al cierre de cada fecha en que algo lo cambia, más `extra`, en una pasada ordenada. → [{ fecha, saldo }] */
+function saldosDeCuentaPorFecha(datos, movimientos, cuenta, extra = []) {
+  const cambios = [];
+  for (const m of movimientos) { const e = efectoEnCuenta(m, cuenta.id); if (e !== 0) cambios.push([m.fecha, e]); }
+  for (const f of extra) cambios.push([f, 0]);
+  cambios.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0));
+  const inicioPrograma = rangoCiclo(datos.ajustes.cicloInicial, datos.ajustes.diaPago).inicio;
+  const existe = (f) => f >= cuenta.fechaSaldoInicial || cuenta.fechaSaldoInicial <= inicioPrograma;
+  const salida = [];
+  let acumulado = 0;
+  for (let i = 0; i < cambios.length; i += 1) {
+    acumulado += cambios[i][1];
+    if (i + 1 < cambios.length && cambios[i + 1][0] === cambios[i][0]) continue;
+    salida.push({ fecha: cambios[i][0], saldo: (existe(cambios[i][0]) ? cuenta.saldoInicial : 0) + acumulado });
+  }
+  return salida;
+}
+
+/**
+ * RU-03 / RU-04: AVISO (no bloqueo) de saldo. Antes de guardar, la vista pregunta qué cuentas quedarían en negativo por un cambio y pide
+ * confirmación ("Esta cuenta quedará en −$ X (hoy tiene $ Y). ¿Continuar?"): la app no sabe lo que hay en el banco (con los datos reales las
+ * cuentas parten en $ 0 hasta marcar el salario) y una cuenta en sobregiro también debe poder transferir. Las acciones NO rechazan por esto:
+ * sirven para confirmar, deshacer y restaurar. Se siguen rechazando en la validación: misma cuenta de origen y destino, tarjetas como origen o
+ * destino de una transferencia común (se paga con "Pagar tarjeta"), montos no válidos o sobre el tope.
+ *
+ * `cambio` = { agregar?: movimiento, editar?: movimiento con id, borrar?: id }. Se evalúan las cuentas (no crédito) cuyo saldo cambia por el
+ * movimiento nuevo o por el anterior (origen y destino de una transferencia o de un aporte con destino, cuenta de un ingreso o de un pago).
+ * Una cuenta se avisa solo si, entre la fecha del cambio y hoy (lo programado a futuro, a su propia fecha), su saldo más bajo queda bajo $ 0 Y
+ * el cambio lo EMPEORA (datos que ya estaban en negativo no avisan por cambios ajenos). Es PURO.
+ * @returns {Array<{cuenta:object, saldoHoy:number, queda:number, fecha:string}>} `saldoHoy` = saldo a hoy antes del cambio; `queda` = el saldo más
+ *   bajo después del cambio y `fecha` el día en que ocurre.
+ */
+export function avisosDeSaldo(datos, cambio, hoy) {
+  const { agregar, editar, borrar } = cambio ?? {};
+  const previo = borrar !== undefined ? buscar(datos.movimientos, borrar, 'El movimiento') : editar ? buscar(datos.movimientos, editar.id, 'El movimiento') : null;
+  const nuevo = editar ?? agregar ?? null;
+  const tocados = [previo, nuevo].filter(Boolean);
+  if (!tocados.length) return [];
+  const idNuevo = nuevo ? (nuevo.id ?? '__nuevo__') : null;
+  const despues = [
+    ...datos.movimientos.filter((m) => m.id !== (previo ? previo.id : null)),
+    ...(nuevo ? [{ ...nuevo, id: idNuevo }] : []),
+  ];
+  const inicio = tocados.reduce((m, x) => (x.fecha < m ? x.fecha : m), tocados[0].fecha);
+  const ultimo = tocados.reduce((m, x) => (x.fecha > m ? x.fecha : m), tocados[0].fecha);
+  const fin = hoy !== undefined && hoy > ultimo ? hoy : ultimo;
+  const ids = new Set();
+  for (const m of tocados) for (const id of [m.cuentaId, m.cuentaDestinoId]) if (id && efectoEnCuenta(m, id) !== 0) ids.add(id);
+  const saldos = hoy !== undefined ? calcularSaldos(datos, hoy) : null;
+  const salida = [];
+  for (const id of ids) {
+    const cuenta = datos.cuentas.find((c) => c.id === id);
+    if (!cuenta || cuenta.tipo === 'credito') continue;
+    const serie = (lista) => saldosDeCuentaPorFecha(datos, lista.filter((x) => x.fecha <= fin), cuenta, [inicio, fin]).filter((s) => s.fecha >= inicio && s.fecha <= fin);
+    const peor = (lista) => serie(lista).reduce((acc, s) => (s.saldo < acc.saldo ? s : acc), { fecha: inicio, saldo: Infinity });
+    const d = peor(despues);
+    if (d.saldo >= 0 || d.saldo >= peor(datos.movimientos).saldo) continue;
+    salida.push({ cuenta, saldoHoy: saldos ? saldos.cuentas[id] : peor(datos.movimientos).saldo, queda: d.saldo, fecha: d.fecha });
+  }
+  return salida;
+}
+
 /** payload { movimiento } sin id/creadoEn (se generan). Con `id` se acepta para restaurar ("Deshacer" de un borrado). */
 export function agregarMovimiento(datos, { movimiento }, ctx) {
   if (!movimiento) throw falla('Falta el movimiento.');
@@ -327,13 +407,15 @@ export function guardarCuenta(datos, { cuenta }, ctx) {
   if (cuenta.id) {
     const previa = buscar(datos.cuentas, cuenta.id, 'La cuenta');
     const editable = previa.tipo === 'credito'
-      ? { nombre: cuenta.nombre, icono: cuenta.icono }
-      : { nombre: cuenta.nombre, icono: cuenta.icono, tipo: cuenta.tipo, saldoInicial: cuenta.saldoInicial, fechaSaldoInicial: cuenta.fechaSaldoInicial };
+      ? { nombre: cuenta.nombre, icono: cuenta.icono, color: cuenta.color }
+      : { nombre: cuenta.nombre, icono: cuenta.icono, tipo: cuenta.tipo, saldoInicial: cuenta.saldoInicial, fechaSaldoInicial: cuenta.fechaSaldoInicial, color: cuenta.color };
     for (const k of Object.keys(editable)) if (editable[k] === undefined) delete editable[k];
-    if (editable.tipo === 'credito') throw falla('Una cuenta no se puede convertir en tarjeta de crédito: cree la deuda.');
-    return validarOLanzar({ ...datos, cuentas: reemplazarPorId(datos.cuentas, previa.id, (c) => ({ ...c, ...editable })) });
+    if (editable.tipo === 'credito') throw falla('Una cuenta no se puede convertir en tarjeta de crédito: agrega la tarjeta en Deudas.');
+    const quitarColor = editable.color === null; // color: null = quitar el color
+    if (quitarColor) delete editable.color;
+    return validarOLanzar({ ...datos, cuentas: reemplazarPorId(datos.cuentas, previa.id, (c) => { const n = { ...c, ...editable }; if (quitarColor) delete n.color; return n; }) });
   }
-  if (cuenta.tipo === 'credito') throw falla('Las tarjetas de crédito se crean desde Deudas.');
+  if (cuenta.tipo === 'credito') throw falla('Las tarjetas de crédito no se crean como una cuenta más: usa "Agregar tarjeta de crédito" (Cuentas o Deudas) y se crea junto con su deuda.');
   const nueva = {
     id: ctx.generarId('cta'),
     nombre: cuenta.nombre,
@@ -344,6 +426,7 @@ export function guardarCuenta(datos, { cuenta }, ctx) {
     icono: cuenta.icono ?? 'banco',
     orden: siguienteOrden(datos.cuentas),
     archivada: false,
+    ...(cuenta.color ? { color: cuenta.color } : {}),
   };
   return validarOLanzar({ ...datos, cuentas: [...datos.cuentas, nueva] });
 }
@@ -355,12 +438,29 @@ export function archivarCuenta(datos, { id, archivada = true }) {
   return validarOLanzar({ ...datos, cuentas: reemplazarPorId(datos.cuentas, id, (x) => ({ ...x, archivada })) });
 }
 
-export function borrarCuenta(datos, { id }) {
+/**
+ * Ronda del usuario B: ¿quitar del todo esta cuenta o deuda cambiaría el patrimonio de un ciclo ya CERRADO? Pasa si tiene saldo inicial
+ * (≠ 0) y existía al cierre de algún ciclo cerrado (saldos.js: una de apertura existe en todo corte; las demás, desde su fecha). Un
+ * ciclo cerrado conserva su patrimonio (R2F-08), así que en ese caso no se borra: se archiva (el historial se conserva).
+ * Sin ciclos cerrados (antes de empezar o durante el primer ciclo) borrar no reescribe nada.
+ */
+export function afectaCiclosCerrados(datos, entidad, hoy) {
+  if (!entidad.saldoInicial || hoy === undefined) return false;
+  const est = estadoCiclo(datos, hoy);
+  if (est.ciclo <= est.cicloInicial) return false;
+  const inicioPrograma = rangoCiclo(datos.ajustes.cicloInicial, datos.ajustes.diaPago).inicio;
+  return entidad.fechaSaldoInicial <= inicioPrograma || entidad.fechaSaldoInicial < est.rango.inicio;
+}
+
+export function borrarCuenta(datos, { id }, ctx) {
   const c = buscar(datos.cuentas, id, 'La cuenta');
-  if (c.tipo === 'credito') throw falla('Una tarjeta no se borra desde Cuentas.');
+  if (c.tipo === 'credito') throw falla('Una tarjeta no se borra desde Cuentas: usa "Eliminar tarjeta" (quita la deuda y su cuenta juntas).', 'tarjeta');
   if (datos.movimientos.some((m) => m.cuentaId === id || m.cuentaDestinoId === id)) throw falla('La cuenta tiene movimientos: se puede archivar, no borrar. También puedes mover todo a otra cuenta con "Mover movimientos a otra cuenta y borrar".', 'en-uso'); // N-10: menciona la opción de mover
   if (datos.ajustes.ingreso.cuentaId === id || datos.recurrentes.some((r) => r.cuentaId === id) || datos.metas.some((m) => m.cuentaId === id)) {
     throw falla('La cuenta se usa en el ingreso, un pago recurrente o una meta: se puede archivar, no borrar. También puedes mover todo a otra cuenta con "Mover movimientos a otra cuenta y borrar".', 'en-uso');
+  }
+  if (afectaCiclosCerrados(datos, c, ctx && ctx.hoy)) {
+    throw falla(`${c.nombre} tiene un saldo inicial que ya cuenta en el patrimonio de ciclos cerrados: borrarla lo cambiaría. Archívala (su historial se conserva) o, si ya no tiene dinero, ajusta su saldo a $ 0 y luego archívala.`, 'afecta-historial');
   }
   return validarOLanzar({ ...datos, cuentas: datos.cuentas.filter((x) => x.id !== id) });
 }
@@ -460,7 +560,31 @@ export function reasignarCuenta(datos, { desdeId, haciaId }, ctx) {
 
 // --- Deudas --------------------------------------------------------------------------------------------------------
 
-const nombreTarjeta = (d) => `${d.nombre} ${d.entidad ?? ''}`.trim();
+/** Tope de caracteres del nombre de una cuenta (esquema.js: cuentas[].nombre). */
+export const NOMBRE_CUENTA_MAX = 40;
+
+/**
+ * RU-01: nombre de la cuenta de crédito vinculada = "nombre entidad". Cada campo admite 40 caracteres pero la cuenta solo 40 en total, así que si
+ * no cabe se ACORTA SOLA (sin rechazar al usuario): se recorta la entidad con "…" hasta que quepa; si el nombre solo ya ocupa casi todo el
+ * tope, la cuenta se llama como el nombre. La deuda conserva nombre y entidad completos.
+ */
+export function nombreTarjeta(d) {
+  const nombre = String(d.nombre ?? '').trim().replace(/\s+/g, ' ');
+  const entidad = String(d.entidad ?? '').trim().replace(/\s+/g, ' ');
+  if (!entidad) return nombre;
+  const completo = `${nombre} ${entidad}`;
+  if (completo.length <= NOMBRE_CUENTA_MAX) return completo;
+  const lugar = NOMBRE_CUENTA_MAX - nombre.length - 1; // espacio que queda para la entidad
+  if (lugar < 4) return nombre; // ni 3 letras y los puntos suspensivos
+  return `${nombre} ${entidad.slice(0, lugar - 1).trimEnd()}…`;
+}
+
+/** RU-09: el texto COMPUESTO (nombre + entidad) también se revisa: un número partido entre los dos campos no debe pasar. */
+function rechazarNumeroPartido(nombre, entidad) {
+  const compuesto = `${nombre ?? ''} ${entidad ?? ''}`;
+  if (!tieneNumeroLargo(compuesto)) return;
+  throw falla('Entre el nombre y el banco juntos aparece un número de tarjeta o de cuenta. La app no guarda esos números: quita los dígitos de uno de los dos campos y vuelve a guardar.', 'numero-largo');
+}
 
 /** Crea o actualiza. Una `tarjeta` nueva crea su cuenta de crédito vinculada en la misma acción (1 a 1). */
 export function guardarDeuda(datos, { deuda }, ctx) {
@@ -468,15 +592,18 @@ export function guardarDeuda(datos, { deuda }, ctx) {
   rechazarNumerosLargos(deuda.nombre, deuda.entidad, deuda.notas);
   if (deuda.id) {
     const previa = buscar(datos.deudas, deuda.id, 'La deuda');
-    const campos = ['nombre', 'entidad', 'saldoInicial', 'fechaSaldoInicial', 'cuota', 'diaPago', 'tasa', 'notas'];
+    rechazarNumeroPartido(deuda.nombre !== undefined ? deuda.nombre : previa.nombre, deuda.entidad !== undefined ? deuda.entidad : previa.entidad);
+    const campos = ['nombre', 'entidad', 'saldoInicial', 'fechaSaldoInicial', 'cuota', 'diaPago', 'tasa', 'notas', 'cupo'];
     const cambios = {};
     for (const k of campos) if (deuda[k] !== undefined) cambios[k] = deuda[k];
     const actualizada = { ...previa, ...cambios };
+    if (actualizada.cupo === null) delete actualizada.cupo; // cupo: null = quitar el cupo
     const cuentas = previa.tipo === 'tarjeta'
       ? datos.cuentas.map((c) => (c.id === previa.cuentaId ? { ...c, nombre: nombreTarjeta(actualizada) } : c))
       : datos.cuentas;
     return validarOLanzar({ ...datos, cuentas, deudas: reemplazarPorId(datos.deudas, previa.id, () => actualizada) });
   }
+  rechazarNumeroPartido(deuda.nombre, deuda.entidad);
   const id = ctx.generarId('deu');
   const base = {
     id,
@@ -491,6 +618,7 @@ export function guardarDeuda(datos, { deuda }, ctx) {
     cuentaId: null,
     notas: deuda.notas ?? '',
     archivada: false,
+    ...(deuda.cupo ? { cupo: deuda.cupo } : {}),
   };
   if (base.tipo === 'tarjeta') {
     const cuentaId = ctx.generarId('cta');
@@ -500,48 +628,292 @@ export function guardarDeuda(datos, { deuda }, ctx) {
   return validarOLanzar({ ...datos, deudas: [...datos.deudas, base] });
 }
 
-/** Solo se archiva una deuda saldada (saldo 0); su cuenta de crédito se archiva con ella. */
-export function archivarDeuda(datos, { id, archivada = true }) {
+/**
+ * Ronda del usuario B: qué usa una deuda (para el texto de confirmación y para decidir si se puede borrar). En una tarjeta cuentan
+ * también las compras hechas con ella (gastos de su cuenta de crédito) y los pagos recurrentes que la usan como método de pago.
+ * → { pagos, compras, ajustes, movimientos, recurrentes, saldo, programados } (RU-05: `saldo` = el de HOY cuando se pasa `hoy` —el que cierra
+ * "Archivar y cerrar el saldo"—; sin `hoy`, el de fin de los tiempos. `programados` = movimientos de la deuda con fecha posterior a hoy.)
+ */
+export function usosDeDeuda(datos, id, hoy) {
   const d = buscar(datos.deudas, id, 'La deuda');
-  if (archivada && calcularSaldos(datos, '9999-12-31').deudas[id] !== 0) throw falla('Solo se puede archivar una deuda saldada (saldo $ 0).', 'no-saldada');
+  let pagos = 0;
+  let compras = 0;
+  let ajustes = 0;
+  let programados = 0;
+  for (const m of datos.movimientos) {
+    const propio = (m.tipo === 'pagoDeuda' || m.tipo === 'ajusteDeuda') && m.deudaId === id;
+    if (m.tipo === 'pagoDeuda' && m.deudaId === id) pagos += 1;
+    else if (m.tipo === 'ajusteDeuda' && m.deudaId === id) ajustes += 1;
+    else if (m.tipo === 'gasto' && d.cuentaId && m.cuentaId === d.cuentaId) compras += 1;
+    else continue;
+    if (propio || m.tipo === 'gasto') if (hoy !== undefined && m.fecha > hoy) programados += 1;
+  }
+  return {
+    pagos, compras, ajustes, movimientos: pagos + compras + ajustes, programados,
+    recurrentes: d.cuentaId ? datos.recurrentes.filter((r) => r.cuentaId === d.cuentaId).length : 0,
+    saldo: calcularSaldos(datos, hoy ?? '9999-12-31').deudas[id],
+  };
+}
+
+/** Cuenta que hereda los pagos recurrentes de una tarjeta que se quita: la elegida o, por omisión, la del ingreso mensual. */
+function moverRecurrentesDeTarjeta(datos, cuentaTarjetaId, haciaId) {
+  if (!cuentaTarjetaId || !datos.recurrentes.some((r) => r.cuentaId === cuentaTarjetaId)) return datos.recurrentes;
+  const destinoId = haciaId ?? datos.ajustes.ingreso.cuentaId;
+  const destino = datos.cuentas.find((c) => c.id === destinoId);
+  if (!destino || destino.id === cuentaTarjetaId || destino.archivada) throw falla('Elige una cuenta activa para los pagos recurrentes que usaban la tarjeta.');
+  return datos.recurrentes.map((r) => (r.cuentaId === cuentaTarjetaId ? { ...r, cuentaId: destino.id } : r));
+}
+
+/** Antes de quitar o archivar: los ciclos ya cerrados guardan el "Pago de deudas" que mostraban (así no cambia con las deudas de hoy). */
+const conCiclosCerradosCongelados = (datos, ctx) => (ctx && ctx.hoy && ctx.ahora ? alAbrir(datos, {}, ctx) : datos);
+
+/** Notas de los dos ajustes que acompañan a archivar con cierre y a restaurar (RU-05): con ellas se sabe cuánto hay que devolver al restaurar. */
+export const NOTA_CIERRE_DEUDA = 'Saldo cerrado al archivar';
+export const NOTA_RESTAURA_DEUDA = 'Saldo restaurado al reactivar';
+
+/** Lo que el cierre de la deuda quitó y aún no se devolvió: Σ ajustes de cierre + Σ ajustes de restauración (negativo = hay saldo por devolver). */
+export function saldoCerradoPendiente(datos, id) {
+  let neto = 0;
+  for (const m of datos.movimientos) {
+    if (m.tipo === 'ajusteDeuda' && m.deudaId === id && (m.nota === NOTA_CIERRE_DEUDA || m.nota === NOTA_RESTAURA_DEUDA)) neto += m.monto;
+  }
+  return neto;
+}
+
+/**
+ * Archiva una deuda (y, si es tarjeta, su cuenta de crédito, como un solo conjunto) o la restaura.
+ * Sin `cerrarSaldo`, solo una deuda saldada (saldo $ 0 A HOY). Con `cerrarSaldo: true` y saldo ≠ 0 se registra antes un `ajusteDeuda` de cierre
+ * (fecha de hoy, nota "Saldo cerrado al archivar") que la deja en $ 0 HOY: el cierre usa el saldo con los movimientos de fecha ≤ hoy (RU-05: antes usaba
+ * el de fin de los tiempos, que incluye abonos programados, y la tarjeta quedaba con saldo ≠ 0 aunque el mensaje decía $ 0). El historial y el patrimonio
+ * de ciclos pasados no cambian (el ajuste es de hoy). Al RESTAURAR una deuda cerrada, se registra un ajuste de hoy que devuelve el saldo que el cierre
+ * había quitado (también sin tocar ciclos cerrados). Los pagos recurrentes que usaban la tarjeta pasan a `recurrentesHaciaId` (por omisión, la cuenta del ingreso).
+ */
+export function archivarDeuda(datos, { id, archivada = true, cerrarSaldo = false, recurrentesHaciaId }, ctx) {
+  const d = buscar(datos.deudas, id, 'La deuda');
+  if (!archivada) {
+    const pendiente = saldoCerradoPendiente(datos, id);
+    let movimientos = datos.movimientos;
+    if (pendiente !== 0) {
+      if (!ctx) throw falla('No se pudo registrar el ajuste que devuelve el saldo de la deuda.');
+      const fechaPropuesta = fechaPorDefecto(datos, ctx.hoy);
+      const fecha = fechaPropuesta < d.fechaSaldoInicial ? d.fechaSaldoInicial : fechaPropuesta;
+      movimientos = [...movimientos, { id: ctx.generarId('mov'), tipo: 'ajusteDeuda', fecha, monto: -pendiente, deudaId: id, nota: NOTA_RESTAURA_DEUDA, origen: null, creadoEn: ctx.ahora, actualizadoEn: null }];
+    }
+    return validarOLanzar({
+      ...datos,
+      movimientos,
+      deudas: reemplazarPorId(datos.deudas, id, (x) => ({ ...x, archivada: false })),
+      cuentas: datos.cuentas.map((c) => (d.cuentaId && c.id === d.cuentaId ? { ...c, archivada: false } : c)),
+    });
+  }
+  // RU-05: el saldo que se cierra es el de la FECHA del ajuste (hoy; antes de empezar el programa, su primer día): lo programado a futuro no cuenta.
+  const fechaPropuesta = ctx && ctx.hoy ? fechaPorDefecto(datos, ctx.hoy) : '9999-12-31';
+  const fecha = fechaPropuesta < d.fechaSaldoInicial ? d.fechaSaldoInicial : fechaPropuesta;
+  const saldo = calcularSaldos(datos, fecha).deudas[id];
+  if (saldo !== 0 && !cerrarSaldo) throw falla('Solo se puede archivar una deuda saldada (saldo $ 0).', 'no-saldada');
+  let base = conCiclosCerradosCongelados(datos, ctx);
+  if (saldo !== 0) {
+    if (!ctx) throw falla('No se pudo registrar el ajuste que cierra el saldo.');
+    const cierre = { id: ctx.generarId('mov'), tipo: 'ajusteDeuda', fecha, monto: -saldo, deudaId: id, nota: NOTA_CIERRE_DEUDA, origen: null, creadoEn: ctx.ahora, actualizadoEn: null };
+    base = { ...base, movimientos: [...base.movimientos, cierre] };
+  }
+  const recurrentes = moverRecurrentesDeTarjeta(base, d.cuentaId, recurrentesHaciaId);
   return validarOLanzar({
-    ...datos,
-    deudas: reemplazarPorId(datos.deudas, id, (x) => ({ ...x, archivada })),
-    cuentas: datos.cuentas.map((c) => (d.cuentaId && c.id === d.cuentaId ? { ...c, archivada } : c)),
+    ...base,
+    recurrentes,
+    deudas: reemplazarPorId(base.deudas, id, (x) => ({ ...x, archivada: true })),
+    cuentas: base.cuentas.map((c) => (d.cuentaId && c.id === d.cuentaId ? { ...c, archivada: true } : c)),
+  });
+}
+
+/**
+ * Ronda del usuario B: borra una deuda (y, si es tarjeta, su cuenta de crédito vinculada, juntas) SOLO si nunca se usó: sin pagos, compras
+ * con la tarjeta ni ajustes. Si tiene saldo inicial y ya hay ciclos cerrados que la incluyen, tampoco (cambiaría su patrimonio): se archiva.
+ * Los ciclos cerrados conservan su "Pago de deudas" (se congela antes); el ciclo actual y los futuros siguen a las cuotas vigentes.
+ */
+export function borrarDeuda(datos, { id, recurrentesHaciaId }, ctx) {
+  const d = buscar(datos.deudas, id, 'La deuda');
+  const u = usosDeDeuda(datos, id);
+  if (u.movimientos > 0) {
+    throw falla(`${d.nombre} tiene ${u.movimientos} movimiento${u.movimientos === 1 ? '' : 's'} (pagos, compras con la tarjeta o ajustes): no se puede borrar sin perder el historial. Archívala (conserva el historial) o mueve sus movimientos a otra deuda.`, 'en-uso');
+  }
+  if (afectaCiclosCerrados(datos, d, ctx && ctx.hoy)) {
+    throw falla(`${d.nombre} tiene un saldo inicial que ya cuenta en el patrimonio de ciclos cerrados: borrarla lo cambiaría. Archívala: se registra un ajuste que la deja en $ 0 hoy y el historial se conserva.`, 'afecta-historial');
+  }
+  const base = conCiclosCerradosCongelados(datos, ctx);
+  const recurrentes = moverRecurrentesDeTarjeta(base, d.cuentaId, recurrentesHaciaId);
+  return validarOLanzar({
+    ...base,
+    recurrentes,
+    deudas: base.deudas.filter((x) => x.id !== id),
+    cuentas: base.cuentas.filter((c) => !(d.cuentaId && c.id === d.cuentaId)),
+  });
+}
+
+/**
+ * Ronda del usuario B: mueve TODO el historial de una deuda (pagos, ajustes y, si es tarjeta, las compras hechas con ella y sus pagos recurrentes) a
+ * otra deuda y borra la primera (y su cuenta de crédito) como un conjunto. Una tarjeta solo se mueve a otra tarjeta (las compras necesitan
+ * una cuenta de crédito). Como en `reasignarCuenta` (R2F-08), el patrimonio de cualquier fecha no cambia: la deuda de destino conserva el saldo
+ * inicial y la fecha de la MÁS ANTIGUA y el de la otra queda como un `ajusteDeuda` con su fecha original ("Saldo inicial de X"); si las dos
+ * son de apertura se suman. Un pago que venía de una cuota programada de la deuda movida pierde ese `origen` (esa cuota deja de existir).
+ */
+export function reasignarDeuda(datos, { desdeId, haciaId }, ctx) {
+  if (desdeId === haciaId) throw falla('Elige una deuda de destino distinta.');
+  const desde = buscar(datos.deudas, desdeId, 'La deuda');
+  const hacia = buscar(datos.deudas, haciaId, 'La deuda de destino');
+  if (hacia.archivada) throw falla('La deuda de destino está archivada: elige una deuda activa.');
+  if (desde.tipo === 'tarjeta' && hacia.tipo !== 'tarjeta') throw falla('Las compras con una tarjeta solo se pueden mover a otra tarjeta de crédito.');
+  if (!ctx) throw falla('No se pudo registrar el saldo inicial de la deuda movida.');
+  const base = conCiclosCerradosCongelados(datos, ctx);
+  const plan = planSaldoReasignado(base, desde, hacia);
+  const cuentaDesde = desde.cuentaId;
+  const cuentaHacia = hacia.cuentaId;
+  const movimientos = base.movimientos.map((m) => {
+    if ((m.tipo === 'pagoDeuda' || m.tipo === 'ajusteDeuda') && m.deudaId === desdeId) return { ...m, deudaId: haciaId, origen: m.origen && m.origen.tipo === 'cuota' && m.origen.id === desdeId ? null : m.origen };
+    if (m.tipo === 'gasto' && cuentaDesde && m.cuentaId === cuentaDesde) return { ...m, cuentaId: cuentaHacia };
+    return m;
+  });
+  if (plan.ajuste) {
+    movimientos.push({ id: ctx.generarId('mov'), tipo: 'ajusteDeuda', fecha: plan.ajuste.fecha, monto: plan.ajuste.monto, deudaId: haciaId, nota: plan.ajuste.nota.replace(' (cuenta movida)', ' (deuda movida)'), origen: null, creadoEn: ctx.ahora, actualizadoEn: null });
+  }
+  return validarOLanzar({
+    ...base,
+    movimientos,
+    deudas: base.deudas.filter((d) => d.id !== desdeId).map((d) => (d.id === haciaId ? { ...d, saldoInicial: plan.saldoInicial, fechaSaldoInicial: plan.fechaSaldoInicial } : d)),
+    cuentas: base.cuentas.filter((c) => c.id !== cuentaDesde),
+    recurrentes: base.recurrentes.map((r) => (cuentaDesde && r.cuentaId === cuentaDesde ? { ...r, cuentaId: cuentaHacia } : r)),
   });
 }
 
 // --- Categorías ----------------------------------------------------------------------------------------------------
 
+const NOMBRE_MAX = 40;
+const claveNombre = (s) => String(s).normalize('NFD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+
+/**
+ * Nombre de categoría o de meta: obligatorio, hasta 40 caracteres y sin repetir otro (sin distinguir mayúsculas ni tildes). Devuelve el
+ * nombre limpio. `omitirId` = la propia categoría al editar. Solo se llama al CREAR o al CAMBIAR el nombre: los datos anteriores con
+ * nombres repetidos siguen siendo válidos.
+ */
+function nombreDeCategoriaValido(datos, nombre, omitirId = null) {
+  const n = typeof nombre === 'string' ? nombre.trim().replace(/\s+/g, ' ') : '';
+  if (!n) throw falla('Escribe el nombre de la categoría.', 'nombre-vacio');
+  if (n.length > NOMBRE_MAX) throw falla(`El nombre es demasiado largo: máximo ${NOMBRE_MAX} caracteres (tiene ${n.length}).`, 'nombre-largo');
+  const repetida = datos.categorias.find((c) => c.id !== omitirId && claveNombre(c.nombre) === claveNombre(n));
+  if (repetida) throw falla(`Ya existe una categoría llamada "${repetida.nombre}"${repetida.archivada ? ' (está archivada: restáurala desde Categorías)' : ''}. Elige otro nombre.`, 'nombre-repetido');
+  return n;
+}
+
+/**
+ * Fija el monto de una categoría de gasto en el ciclo actual y en TODOS los presupuestos de ciclos futuros que ya existan (los que se
+ * creen después la heredan al copiar). Los ciclos cerrados no se tocan. Devuelve los datos nuevos.
+ */
+function asignarDesdeCicloActual(datos, categoriaId, monto, ctx, desde = null) {
+  if (!esPesosValido(monto, { min: 0, max: MAX_PESOS })) throw falla(mensajePesos(monto, 'El monto asignado debe ser un entero en pesos (0 o más).'));
+  const actual = desde ?? estadoCiclo(datos, ctx.hoy).ciclo;
+  const presupuestos = {};
+  for (const [ciclo, p] of Object.entries(datos.presupuestos)) {
+    presupuestos[ciclo] = ciclo >= actual ? { ...p, asignaciones: { ...p.asignaciones, [categoriaId]: monto }, origen: 'manual' } : p;
+  }
+  return { ...datos, presupuestos };
+}
+
+/** Quita la categoría de las asignaciones de los ciclos indicados (todos si no se indica `desdeCiclo`). */
+function quitarAsignaciones(datos, categoriaId, desdeCiclo = null) {
+  const presupuestos = {};
+  for (const [ciclo, p] of Object.entries(datos.presupuestos)) {
+    if ((desdeCiclo === null || ciclo >= desdeCiclo) && p.asignaciones[categoriaId] !== undefined) {
+      const { [categoriaId]: _quitada, ...resto } = p.asignaciones;
+      presupuestos[ciclo] = { ...p, asignaciones: resto };
+    } else presupuestos[ciclo] = p;
+  }
+  return { ...datos, presupuestos };
+}
+
+/**
+ * Crea o edita una categoría. Alta: { nombre, tipo, grupo (si es de gasto), icono?, asignacion? } — `asignacion` (pesos ≥ 0, solo de
+ * gasto) es el monto del ciclo actual y de los futuros ya creados. Edición: { id, nombre?, grupo?, icono? }. Una categoría que es la
+ * barra de una meta (`metaId`) se cambia desde Metas.
+ */
 export function guardarCategoria(datos, { categoria }, ctx) {
   if (!categoria) throw falla('Falta la categoría.');
   rechazarNumerosLargos(categoria.nombre);
   if (categoria.id) {
     const previa = buscar(datos.categorias, categoria.id, 'La categoría');
+    if (previa.metaId) {
+      const meta = datos.metas.find((m) => m.id === previa.metaId);
+      throw falla(`Esta categoría es el presupuesto de la meta "${meta ? meta.nombre : 'de ahorro'}": cámbiala desde Metas.`, 'de-meta');
+    }
     const permitidos = previa.vinculo ? ['nombre', 'icono'] : previa.tipo === 'gasto' ? ['nombre', 'icono', 'grupo'] : ['nombre', 'icono'];
     const cambios = {};
     for (const k of permitidos) if (categoria[k] !== undefined) cambios[k] = categoria[k];
+    if (cambios.nombre !== undefined && claveNombre(cambios.nombre) !== claveNombre(previa.nombre)) cambios.nombre = nombreDeCategoriaValido(datos, cambios.nombre, previa.id);
+    else if (cambios.nombre !== undefined) cambios.nombre = typeof cambios.nombre === 'string' && cambios.nombre.trim() ? cambios.nombre.trim().replace(/\s+/g, ' ') : nombreDeCategoriaValido(datos, cambios.nombre, previa.id);
+    if (cambios.grupo !== undefined && !GRUPOS.includes(cambios.grupo)) throw falla('Elige el grupo de la categoría: necesidades, gustos o ahorro.');
     return validarOLanzar({ ...datos, categorias: reemplazarPorId(datos.categorias, previa.id, (c) => ({ ...c, ...cambios })) });
   }
   if (!['gasto', 'ingreso'].includes(categoria.tipo)) throw falla('Indique si la categoría es de gasto o de ingreso.');
+  const nombre = nombreDeCategoriaValido(datos, categoria.nombre);
+  if (categoria.tipo === 'gasto' && !GRUPOS.includes(categoria.grupo)) throw falla('Elige el grupo de la categoría: necesidades, gustos o ahorro.');
   const nueva = {
     id: ctx.generarId('cat'),
-    nombre: categoria.nombre,
+    nombre,
     tipo: categoria.tipo,
     grupo: categoria.tipo === 'gasto' ? categoria.grupo : null,
     vinculo: null,
     icono: categoria.icono ?? 'otro',
     orden: siguienteOrden(datos.categorias),
     archivada: false,
+    creadaEn: ctx.hoy,
   };
-  return validarOLanzar({ ...datos, categorias: [...datos.categorias, nueva] });
+  let resultado = { ...datos, categorias: [...datos.categorias, nueva] };
+  if (categoria.asignacion !== undefined && categoria.asignacion !== null) {
+    if (categoria.tipo !== 'gasto') throw falla('Solo las categorías de gasto tienen presupuesto.');
+    if (categoria.asignacion > 0) resultado = asignarDesdeCicloActual(resultado, nueva.id, categoria.asignacion, ctx);
+    else if (!esPesosValido(categoria.asignacion, { min: 0, max: MAX_PESOS })) throw falla(mensajePesos(categoria.asignacion, 'El monto asignado debe ser un entero en pesos (0 o más).'));
+  }
+  return validarOLanzar(resultado);
 }
 
 export function archivarCategoria(datos, { id, archivada = true }) {
   const c = buscar(datos.categorias, id, 'La categoría');
   if (c.vinculo) throw falla('Esta categoría es automática y no se puede archivar.', 'vinculada');
+  if (c.metaId) throw falla('Esta categoría es el presupuesto de una meta de ahorro: archiva o restaura la meta desde Metas.', 'de-meta');
   if (archivada && datos.ajustes.ingreso.categoriaId === id) throw falla('Esta categoría es la del ingreso mensual: cámbiela primero en Ajustes.');
   return validarOLanzar({ ...datos, categorias: reemplazarPorId(datos.categorias, id, (x) => ({ ...x, archivada })) });
+}
+
+/**
+ * RU-07: ciclos YA CERRADOS (anteriores al actual) en que la categoría tiene un monto asignado > 0. Eliminar la categoría los reescribiría (cambiaría
+ * lo asignado, el "sin asignar" y las alertas de esos ciclos), y no se puede dejar una asignación a una categoría que ya no existe: en ese caso no
+ * se elimina, se archiva. Sin `hoy` (sin contexto) no se puede saber qué ciclo cerró y devuelve [].
+ */
+function ciclosCerradosConMonto(datos, categoriaId, hoy) {
+  if (!hoy) return [];
+  const actual = estadoCiclo(datos, hoy).ciclo;
+  return Object.keys(datos.presupuestos).filter((c) => c < actual && (datos.presupuestos[c].asignaciones[categoriaId] ?? 0) > 0).sort();
+}
+
+const textoCiclos = (ciclos) => (ciclos.length <= 2 ? ciclos.map((c) => formatearFecha(`${c}-01`, 'mes-anio')).join(' y ') : `${ciclos.length} ciclos cerrados`);
+
+/**
+ * Elimina una categoría que nunca se usó: sin movimientos, sin pagos recurrentes y que no sea la del ingreso mensual, automática ni la
+ * barra de una meta. RU-07: la quita del ciclo actual y de los futuros; si tiene un monto asignado > 0 en un ciclo YA CERRADO no se elimina (reescribiría
+ * ese ciclo: cambiaría su asignado, su "sin asignar" y sus alertas): se ofrece archivarla. Una clave en $ 0 de un ciclo cerrado no cambia ninguna cifra y se
+ * retira para no dejar una referencia rota. Si ya tiene historia, el mensaje ofrece archivarla o reasignarla (Q12).
+ */
+export function borrarCategoria(datos, { id }, ctx) {
+  const c = buscar(datos.categorias, id, 'La categoría');
+  if (c.vinculo) throw falla('Esta categoría es automática y no se puede eliminar.', 'vinculada');
+  if (c.metaId) throw falla('Esta categoría es el presupuesto de una meta de ahorro: se elimina junto con la meta, desde Metas.', 'de-meta');
+  if (datos.ajustes.ingreso.categoriaId === id) throw falla('Esta categoría es la del ingreso mensual: cámbiela primero en Ajustes.', 'en-uso');
+  const u = usosDeCategoria(datos, id);
+  if (u.movimientos > 0) throw falla(`No se puede eliminar: tiene ${u.movimientos} movimiento${u.movimientos === 1 ? '' : 's'}. Puedes archivarla (se conserva el historial) o reasignarlos a otra categoría.`, 'con-movimientos');
+  if (u.recurrentes > 0) throw falla(`No se puede eliminar: la usa${u.recurrentes === 1 ? ' 1 pago recurrente' : `n ${u.recurrentes} pagos recurrentes`}. Cámbialo${u.recurrentes === 1 ? '' : 's'} primero o archiva la categoría.`, 'en-uso');
+  const cerrados = ciclosCerradosConMonto(datos, id, ctx && ctx.hoy);
+  if (cerrados.length) throw falla(`No se puede eliminar: tiene un monto asignado en ${textoCiclos(cerrados)}, que ya cerró y conserva lo que mostraba. Archívala: deja de ofrecerse y el historial se conserva.`, 'afecta-historial');
+  const sinAsignaciones = quitarAsignaciones(datos, id);
+  return validarOLanzar({ ...sinAsignaciones, categorias: datos.categorias.filter((x) => x.id !== id) });
 }
 
 /** Qué se mueve al reasignar una categoría a otra (para el texto de confirmación de la vista). */
@@ -564,6 +936,7 @@ export function reasignarCategoria(datos, { desdeId, haciaId }) {
   const desde = buscar(datos.categorias, desdeId, 'La categoría');
   const hacia = buscar(datos.categorias, haciaId, 'La categoría de destino');
   if (desde.vinculo || hacia.vinculo) throw falla('Las categorías automáticas no se reasignan.', 'vinculada');
+  if (desde.metaId || hacia.metaId) throw falla('La categoría de una meta de ahorro no se reasigna: usa Metas (mover los aportes a otra meta).', 'de-meta');
   if (desde.tipo !== hacia.tipo) throw falla('Elige una categoría del mismo tipo (gasto o ingreso).');
   if (hacia.archivada) throw falla('La categoría de destino está archivada: elige una categoría activa.');
   const mover = (id) => (id === desdeId ? haciaId : id);
@@ -700,20 +1073,143 @@ export function borrarRecurrente(datos, { id }) {
 
 // --- Metas ---------------------------------------------------------------------------------------------------------
 
-export function guardarMeta(datos, { meta }, ctx) {
+/** Valida un monto opcional (objetivo): vacío → null; si viene, entero en pesos mayor que cero y dentro del tope. */
+function objetivoValido(v) {
+  if (v === undefined || v === null) return null;
+  if (!esPesosValido(v, { min: 1, max: MAX_PESOS })) throw falla(mensajePesos(v, 'El monto objetivo debe ser un entero en pesos mayor que cero (o déjalo vacío para un ahorro libre).'));
+  return v;
+}
+
+function nombreDeMetaValido(datos, nombre, omitirId = null) {
+  const n = typeof nombre === 'string' ? nombre.trim().replace(/\s+/g, ' ') : '';
+  if (!n) throw falla('Escribe el nombre de la meta.', 'nombre-vacio');
+  if (n.length > NOMBRE_MAX) throw falla(`El nombre es demasiado largo: máximo ${NOMBRE_MAX} caracteres (tiene ${n.length}).`, 'nombre-largo');
+  const repetida = datos.metas.find((m) => m.id !== omitirId && claveNombre(m.nombre) === claveNombre(n));
+  if (repetida) throw falla(`Ya tienes una meta llamada "${repetida.nombre}"${repetida.archivada ? ' (está archivada: restáurala)' : ''}. Elige otro nombre.`, 'nombre-repetido');
+  return n;
+}
+
+/** Crea la categoría de Ahorro que es la "barra" de la meta en Presupuesto (campo `metaId`) y le asigna `monto` desde el ciclo actual. */
+function crearBarraDeMeta(datos, meta, monto, ctx) {
+  if (monto === undefined || monto === null) return datos;
+  if (!esPesosValido(monto, { min: 1, max: MAX_PESOS })) throw falla(mensajePesos(monto, 'El monto mensual para presupuestar debe ser un entero en pesos mayor que cero.'));
+  const nombre = nombreDeCategoriaValido(datos, meta.nombre);
+  const barra = { id: ctx.generarId('cat'), nombre, tipo: 'gasto', grupo: 'ahorro', vinculo: null, icono: meta.icono, orden: siguienteOrden(datos.categorias), archivada: false, metaId: meta.id, creadaEn: ctx.hoy };
+  return asignarDesdeCicloActual({ ...datos, categorias: [...datos.categorias, barra] }, barra.id, monto, ctx);
+}
+
+/**
+ * Crea o edita una meta de ahorro. Alta: { nombre, icono?, color?, objetivo?, fechaLimite?, cuentaId? } y, aparte, `presupuestoMensual`
+ * (pesos > 0): crea una categoría del grupo Ahorro con el nombre de la meta (campo `metaId`) y le asigna ese monto desde el ciclo actual,
+ * para que la meta tenga su propia barra en Presupuesto; sus aportes consumen esa barra y no "Ahorro y metas" (una sola vez).
+ * Sin `objetivo` es un ahorro libre (solo acumula); `fechaLimite` solo con objetivo. Al renombrarla o cambiarle el ícono se sincroniza su
+ * barra; `presupuestoMensual` al editar solo crea la barra si todavía no la tiene.
+ */
+export function guardarMeta(datos, { meta, presupuestoMensual }, ctx) {
   if (!meta) throw falla('Falta la meta.');
   rechazarNumerosLargos(meta.nombre);
+  if (meta.color !== undefined && meta.color !== null && !COLORES_META.includes(meta.color)) throw falla('Ese color no está disponible.');
   if (meta.id) {
     const previa = buscar(datos.metas, meta.id, 'La meta');
-    const { id: _id, creadaEn: _c, ...cambios } = meta;
-    return validarOLanzar({ ...datos, metas: reemplazarPorId(datos.metas, previa.id, (m) => ({ ...m, ...cambios })) });
+    const cambios = {};
+    for (const k of ['nombre', 'objetivo', 'fechaLimite', 'icono', 'color', 'cuentaId']) if (meta[k] !== undefined) cambios[k] = meta[k];
+    if (cambios.nombre !== undefined) cambios.nombre = nombreDeMetaValido(datos, cambios.nombre, previa.id);
+    if (cambios.objetivo !== undefined) cambios.objetivo = objetivoValido(cambios.objetivo);
+    const objetivo = cambios.objetivo !== undefined ? cambios.objetivo : previa.objetivo;
+    if (objetivo === null) {
+      if (cambios.fechaLimite !== undefined && cambios.fechaLimite !== null) throw falla('La fecha límite necesita un monto objetivo: escríbelo o quita la fecha.', 'fecha-sin-objetivo');
+      cambios.fechaLimite = null; // al quedar libre, la fecha no tiene sentido
+    } else if (cambios.fechaLimite !== undefined && cambios.fechaLimite !== null && !esFechaISO(cambios.fechaLimite)) throw falla('La fecha límite no es válida.');
+    const nueva = { ...previa, ...cambios };
+    let resultado = { ...datos, metas: reemplazarPorId(datos.metas, previa.id, () => nueva) };
+    const barra = barraDeMeta(datos, previa.id);
+    if (barra) {
+      const nombre = nueva.nombre === barra.nombre ? barra.nombre : nombreDeCategoriaValido(datos, nueva.nombre, barra.id);
+      resultado = { ...resultado, categorias: reemplazarPorId(resultado.categorias, barra.id, (c) => ({ ...c, nombre, icono: nueva.icono })) };
+    } else resultado = crearBarraDeMeta(resultado, nueva, presupuestoMensual, ctx);
+    return validarOLanzar(resultado);
   }
-  const nueva = { cuentaId: null, icono: 'escudo', archivada: false, ...meta, id: ctx.generarId('met'), creadaEn: ctx.hoy };
-  return validarOLanzar({ ...datos, metas: [...datos.metas, nueva] });
+  const nombre = nombreDeMetaValido(datos, meta.nombre);
+  const objetivo = objetivoValido(meta.objetivo);
+  let fechaLimite = meta.fechaLimite ?? null;
+  if (fechaLimite !== null) {
+    if (objetivo === null) throw falla('La fecha límite necesita un monto objetivo: escríbelo o quita la fecha.', 'fecha-sin-objetivo');
+    if (!esFechaISO(fechaLimite)) throw falla('La fecha límite no es válida.');
+    if (fechaLimite < ctx.hoy) throw falla('La fecha límite no puede ser anterior a hoy.');
+  }
+  fechaLimite = objetivo === null ? null : fechaLimite;
+  const nueva = {
+    id: ctx.generarId('met'),
+    nombre,
+    objetivo,
+    fechaLimite,
+    cuentaId: meta.cuentaId ?? null,
+    icono: meta.icono ?? 'escudo',
+    creadaEn: ctx.hoy,
+    archivada: false,
+    ...(meta.color ? { color: meta.color } : {}),
+  };
+  return validarOLanzar(crearBarraDeMeta({ ...datos, metas: [...datos.metas, nueva] }, nueva, presupuestoMensual, ctx));
 }
 
-export function archivarMeta(datos, { id, archivada = true }) {
+/**
+ * Archiva o restaura una meta (y su barra de presupuesto). Archivada deja de ofrecerse y su monto mensual se quita de los ciclos FUTUROS (el
+ * ciclo en curso conserva lo asignado, que ya tiene aportes); al restaurarla, el monto del último ciclo que lo tenía vuelve a los ciclos futuros.
+ */
+export function archivarMeta(datos, { id, archivada = true }, ctx) {
   buscar(datos.metas, id, 'La meta');
-  return { ...datos, metas: reemplazarPorId(datos.metas, id, (m) => ({ ...m, archivada })) };
+  const barra = barraDeMeta(datos, id);
+  let resultado = { ...datos, metas: reemplazarPorId(datos.metas, id, (m) => ({ ...m, archivada })) };
+  if (barra) {
+    resultado = { ...resultado, categorias: reemplazarPorId(resultado.categorias, barra.id, (c) => ({ ...c, archivada })) };
+    if (ctx) {
+      const actual = estadoCiclo(datos, ctx.hoy).ciclo;
+      const siguiente = cicloSiguiente(actual);
+      if (archivada) resultado = quitarAsignaciones(resultado, barra.id, siguiente);
+      else {
+        const conMonto = Object.keys(datos.presupuestos).filter((c) => c <= actual && datos.presupuestos[c].asignaciones[barra.id] > 0).sort().pop();
+        if (conMonto !== undefined) resultado = asignarDesdeCicloActual(resultado, barra.id, datos.presupuestos[conMonto].asignaciones[barra.id], ctx, siguiente);
+      }
+    }
+  }
+  return resultado;
 }
 
+/** Qué hay que decidir antes de eliminar una meta: aportes y retiros que tiene (para el texto de confirmación de la vista). */
+export function usosDeMeta(datos, id) {
+  const movs = datos.movimientos.filter((m) => m.metaId === id);
+  return { movimientos: movs.length, aportes: movs.filter((m) => m.tipo === 'aporteMeta').length, retiros: movs.filter((m) => m.tipo === 'retiroMeta').length, barra: barraDeMeta(datos, id) !== null };
+}
+
+/**
+ * Elimina una meta. Sin aportes ni retiros se borra tal cual (y su barra de presupuesto). Con ellos exige `destinoId` (otra meta activa):
+ * los movimientos pasan a esa meta y consumen la categoría de la meta destino (nunca quedan huérfanos); si no hay destino se rechaza y el
+ * mensaje ofrece archivar. RU-07: la barra eliminada se quita del ciclo actual y de los futuros. Si la meta tiene aportes o retiros de un ciclo YA
+ * CERRADO, o su barra tiene un monto asignado en uno, no se elimina (moverlos o quitar la barra reescribiría lo que ese ciclo mostraba, p. ej. una
+ * alerta nueva): se ofrece archivarla.
+ */
+export function borrarMeta(datos, { id, destinoId = null }, ctx) {
+  buscar(datos.metas, id, 'La meta');
+  const u = usosDeMeta(datos, id);
+  if (ctx && ctx.hoy) {
+    const est = estadoCiclo(datos, ctx.hoy);
+    const barraMeta = barraDeMeta(datos, id);
+    const cerrados = barraMeta ? ciclosCerradosConMonto(datos, barraMeta.id, ctx.hoy) : [];
+    const aportesCerrados = datos.movimientos.some((m) => m.metaId === id && m.fecha < est.rango.inicio);
+    if (cerrados.length || aportesCerrados) throw falla('Esta meta tiene aportes o presupuesto en ciclos que ya cerraron y conservan lo que mostraban: eliminarla los cambiaría. Archívala: deja de ofrecerse y se conserva todo.', 'afecta-historial');
+  }
+  let movimientos = datos.movimientos;
+  if (u.movimientos > 0) {
+    if (!destinoId) throw falla(`Esta meta tiene ${u.movimientos} aporte${u.movimientos === 1 ? '' : 's'} o retiro${u.movimientos === 1 ? '' : 's'}: elige otra meta para moverlos o archívala (se conservan).`, 'con-aportes');
+    if (destinoId === id) throw falla('Elige una meta de destino distinta.');
+    const destino = buscar(datos.metas, destinoId, 'La meta de destino');
+    if (destino.archivada) throw falla('La meta de destino está archivada: elige una activa.');
+    const categoriaId = categoriaDeMeta(datos, destinoId)?.id;
+    if (!categoriaId) throw falla('No hay una categoría de ahorro para la meta de destino.');
+    movimientos = datos.movimientos.map((m) => (m.metaId === id ? { ...m, metaId: destinoId, categoriaId } : m));
+  }
+  const barra = barraDeMeta(datos, id);
+  let resultado = { ...datos, movimientos, metas: datos.metas.filter((m) => m.id !== id) };
+  if (barra) resultado = { ...quitarAsignaciones(resultado, barra.id), categorias: datos.categorias.filter((c) => c.id !== barra.id) };
+  return validarOLanzar(resultado);
+}

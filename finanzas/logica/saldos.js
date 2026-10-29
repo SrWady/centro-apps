@@ -104,3 +104,33 @@ export function totalApartadoMetas(datos, hasta) {
   }
   return total;
 }
+
+/**
+ * Ronda del usuario B: gasto por cuenta o método de pago en uno o varios ciclos (PURO). Cada cuenta es un método de pago; una compra con
+ * la tarjeta de crédito cuenta en la tarjeta. Solo `gasto` (compras y pagos con esa cuenta): no cuentan transferencias, pagos de deuda
+ * ni aportes a metas (el pago de la tarjeta ya se vio como gasto cuando se hizo la compra). Con `hasta`, lo programado a futuro no suma.
+ * @param {string[]} ciclos IDs 'YYYY-MM'
+ * @returns {{total:number, filas:Array<{cuenta:object, monto:number, fraccion:number}>}} de mayor a menor gasto
+ */
+export function gastoPorCuenta(datos, ciclos, hasta) {
+  const rangos = ciclos.map((c) => rangoCiclo(c, datos.ajustes.diaPago));
+  const montos = {};
+  for (const m of datos.movimientos) {
+    if (m.tipo !== 'gasto' || (hasta !== undefined && m.fecha > hasta)) continue;
+    if (rangos.some((r) => m.fecha >= r.inicio && m.fecha <= r.fin)) montos[m.cuentaId] = (montos[m.cuentaId] ?? 0) + m.monto;
+  }
+  const filas = datos.cuentas
+    .filter((c) => montos[c.id] > 0)
+    .map((cuenta) => ({ cuenta, monto: montos[cuenta.id] }))
+    .sort((a, b) => b.monto - a.monto || a.cuenta.orden - b.cuenta.orden);
+  const total = filas.reduce((s, f) => s + f.monto, 0);
+  return { total, filas: filas.map((f) => ({ ...f, fraccion: total > 0 ? f.monto / total : 0 })) };
+}
+
+/**
+ * Cupo disponible de una deuda con cupo (tope − saldo, nunca negativo) o null si no tiene cupo. Informativo: el saldo ya incluye las
+ * compras con la tarjeta.
+ */
+export function cupoDisponible(deuda, saldo) {
+  return deuda && typeof deuda.cupo === 'number' ? Math.max(0, deuda.cupo - saldo) : null;
+}

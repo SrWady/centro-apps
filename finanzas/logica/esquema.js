@@ -19,10 +19,14 @@ export const VERSION = 1;
 export const APP = 'finanzas';
 export const migraciones = {};
 
-export const TIPOS_CUENTA = Object.freeze(['banco', 'ahorro', 'efectivo', 'credito']);
+export const TIPOS_CUENTA = Object.freeze(['banco', 'ahorro', 'efectivo', 'credito', 'billetera']);
+/** Ronda del usuario B: color opcional de una cuenta (clave de una paleta fija; el color en sí vive en la vista). Los datos v1 sin color siguen siendo válidos. */
+export const COLORES_CUENTA = Object.freeze(['azul', 'verde', 'naranja', 'rojo', 'morado', 'rosa', 'turquesa', 'gris']);
 export const TIPOS_DEUDA = Object.freeze(['tarjeta', 'credito', 'otro']);
 export const GRUPOS = Object.freeze(['necesidades', 'gustos', 'ahorro']);
 export const VINCULOS = Object.freeze(['cuotas-deudas', 'abono-deudas', 'metas']);
+/** Colores (etiqueta) que se pueden dar a una meta de ahorro; la vista los traduce a variables de tema (RONDA-USUARIO-A). */
+export const COLORES_META = Object.freeze(['acento', 'azul', 'naranja', 'verde', 'celeste', 'amarillo', 'rojo', 'gris']);
 export const ORIGENES_PRESUPUESTO = Object.freeze(['semilla', 'copia', 'manual']);
 export const TIPOS_ORIGEN = Object.freeze(['recurrente', 'cuota', 'salario']);
 export const TIPOS_MOVIMIENTO = Object.freeze(['gasto', 'ingreso', 'transferencia', 'pagoDeuda', 'aporteMeta', 'retiroMeta', 'ajusteCuenta', 'ajusteDeuda']);
@@ -310,10 +314,34 @@ export function huellaTexto(t) {
   return (h >>> 0).toString(16).padStart(8, '0');
 }
 
+/**
+ * RU-01: nombre del campo (con artículo) según la ruta del validador, para que un mensaje de longitud diga QUÉ campo acortar.
+ * 'cuentas[2].nombre' → 'el nombre de la cuenta'. Una ruta desconocida da null (se usa el mensaje genérico).
+ */
+const ETIQUETAS_CAMPO = Object.freeze({
+  'cuentas.nombre': 'el nombre de la cuenta',
+  'deudas.nombre': 'el nombre de la deuda o tarjeta',
+  'deudas.entidad': 'el banco o entidad',
+  'deudas.notas': 'las notas de la deuda',
+  'categorias.nombre': 'el nombre de la categoría',
+  'recurrentes.nombre': 'el nombre del pago recurrente',
+  'metas.nombre': 'el nombre de la meta',
+  'ajustes.ingreso.nombre': 'el nombre del ingreso',
+  'movimiento.nota': 'la nota',
+  'movimientos.nota': 'la nota',
+});
+export function etiquetaDeCampo(ruta) {
+  return ETIQUETAS_CAMPO[String(ruta).replace(/\[\d+\]/g, '')] ?? null;
+}
+
 function texto(ctx, ruta, v, { min = 0, max, defecto = '' } = {}) {
   if (v === undefined && min === 0) return defecto;
   if (!esTexto(v, { min, max })) {
-    ctx.error(ruta, min > 0 ? `Debe ser un texto de ${min} a ${max} caracteres.` : `Debe ser un texto de hasta ${max} caracteres.`);
+    const campo = etiquetaDeCampo(ruta);
+    const largo = typeof v === 'string' ? v.trim().length : null;
+    if (campo && largo !== null && largo > max) ctx.error(ruta, `${campo.charAt(0).toUpperCase()}${campo.slice(1)} admite hasta ${max} caracteres y tiene ${largo}. Acorta ese campo.`);
+    else if (campo && largo === 0 && min > 0) ctx.error(ruta, `Escribe ${campo} (hasta ${max} caracteres).`);
+    else ctx.error(ruta, min > 0 ? `Debe ser un texto de ${min} a ${max} caracteres.` : `Debe ser un texto de hasta ${max} caracteres.`);
     return defecto;
   }
   const limpio = v.trim();
@@ -397,7 +425,7 @@ function validarTasa(ctx, ruta, v, nombreDeuda) {
 
 function validarCuenta(raw, i, ctx, vistos) {
   const ruta = `cuentas[${i}]`;
-  const c = tomar(raw, ['id', 'nombre', 'tipo', 'saldoInicial', 'fechaSaldoInicial', 'deudaId', 'icono', 'orden', 'archivada'], ctx, ruta);
+  const c = tomar(raw, ['id', 'nombre', 'tipo', 'saldoInicial', 'fechaSaldoInicial', 'deudaId', 'icono', 'orden', 'archivada', 'color'], ctx, ruta);
   const out = { id: id(ctx, `${ruta}.id`, c.id, vistos) };
   out.nombre = texto(ctx, `${ruta}.nombre`, c.nombre, { min: 1, max: 40 });
   if (!esUno(c.tipo, TIPOS_CUENTA)) ctx.error(`${ruta}.tipo`, 'Tipo de cuenta inválido.');
@@ -420,12 +448,16 @@ function validarCuenta(raw, i, ctx, vistos) {
   out.icono = icono(ctx, `${ruta}.icono`, c.icono);
   out.orden = orden(ctx, `${ruta}.orden`, c.orden, i + 1);
   out.archivada = booleano(ctx, `${ruta}.archivada`, c.archivada, false);
+  if (c.color !== undefined && c.color !== null) {
+    if (esUno(c.color, COLORES_CUENTA)) out.color = c.color;
+    else ctx.aviso(`${ruta}.color`, 'Color desconocido; se quitó.');
+  }
   return out;
 }
 
 function validarDeuda(raw, i, ctx, vistos) {
   const ruta = `deudas[${i}]`;
-  const d = tomar(raw, ['id', 'nombre', 'entidad', 'tipo', 'saldoInicial', 'fechaSaldoInicial', 'cuota', 'diaPago', 'tasa', 'cuentaId', 'notas', 'archivada'], ctx, ruta);
+  const d = tomar(raw, ['id', 'nombre', 'entidad', 'tipo', 'saldoInicial', 'fechaSaldoInicial', 'cuota', 'diaPago', 'tasa', 'cuentaId', 'notas', 'archivada', 'cupo'], ctx, ruta);
   const out = { id: id(ctx, `${ruta}.id`, d.id, vistos) };
   out.nombre = texto(ctx, `${ruta}.nombre`, d.nombre, { min: 1, max: 40 });
   out.entidad = texto(ctx, `${ruta}.entidad`, d.entidad, { max: 40 });
@@ -444,12 +476,17 @@ function validarDeuda(raw, i, ctx, vistos) {
   out.cuentaId = d.cuentaId ?? null;
   out.notas = texto(ctx, `${ruta}.notas`, d.notas, { max: 200 });
   out.archivada = booleano(ctx, `${ruta}.archivada`, d.archivada, false);
+  // Ronda del usuario B: cupo opcional (tope de una tarjeta o línea de crédito); si falta, el campo no existe (datos v1 idénticos).
+  if (d.cupo !== undefined && d.cupo !== null) {
+    if (!esPesosValido(d.cupo, { min: 1, max: MAX_PESOS })) ctx.error(`${ruta}.cupo`, mensajePesos(d.cupo, 'El cupo debe ser un entero en pesos mayor que cero.'));
+    else out.cupo = d.cupo;
+  }
   return out;
 }
 
 function validarCategoria(raw, i, ctx, vistos) {
   const ruta = `categorias[${i}]`;
-  const c = tomar(raw, ['id', 'nombre', 'tipo', 'grupo', 'vinculo', 'icono', 'orden', 'archivada'], ctx, ruta);
+  const c = tomar(raw, ['id', 'nombre', 'tipo', 'grupo', 'vinculo', 'icono', 'orden', 'archivada', 'metaId', 'creadaEn'], ctx, ruta);
   const out = { id: id(ctx, `${ruta}.id`, c.id, vistos) };
   out.nombre = texto(ctx, `${ruta}.nombre`, c.nombre, { min: 1, max: 40 });
   if (!esUno(c.tipo, ['gasto', 'ingreso'])) ctx.error(`${ruta}.tipo`, 'El tipo de categoría debe ser gasto o ingreso.');
@@ -468,6 +505,16 @@ function validarCategoria(raw, i, ctx, vistos) {
   out.icono = icono(ctx, `${ruta}.icono`, c.icono);
   out.orden = orden(ctx, `${ruta}.orden`, c.orden, i + 1);
   out.archivada = booleano(ctx, `${ruta}.archivada`, c.archivada, false);
+  // Campos opcionales (RONDA-USUARIO-A, sin subir VERSION): `metaId` = esta categoría es la barra de presupuesto de esa meta de ahorro;
+  // `creadaEn` = día de alta (las categorías nuevas se ofrecen primero al registrar un movimiento). Si faltan, no se escriben.
+  if (c.metaId !== undefined && c.metaId !== null) {
+    if (!esId(c.metaId)) ctx.error(`${ruta}.metaId`, 'La meta vinculada no es válida.');
+    else out.metaId = c.metaId;
+  }
+  if (c.creadaEn !== undefined && c.creadaEn !== null) {
+    if (!esFechaISO(c.creadaEn)) ctx.error(`${ruta}.creadaEn`, 'La fecha de creación de la categoría no es válida.');
+    else out.creadaEn = c.creadaEn;
+  }
   return out;
 }
 
@@ -511,13 +558,28 @@ function validarRecurrente(raw, i, ctx, vistos) {
 
 function validarMeta(raw, i, ctx, vistos) {
   const ruta = `metas[${i}]`;
-  const m = tomar(raw, ['id', 'nombre', 'objetivo', 'fechaLimite', 'cuentaId', 'icono', 'creadaEn', 'archivada'], ctx, ruta);
+  const m = tomar(raw, ['id', 'nombre', 'objetivo', 'fechaLimite', 'cuentaId', 'icono', 'creadaEn', 'archivada', 'color'], ctx, ruta);
   const out = { id: id(ctx, `${ruta}.id`, m.id, vistos) };
   out.nombre = texto(ctx, `${ruta}.nombre`, m.nombre, { min: 1, max: 40 });
-  if (!esPesosValido(m.objetivo, { min: 1, max: MAX_PESOS })) ctx.error(`${ruta}.objetivo`, mensajePesos(m.objetivo, 'El objetivo debe ser un entero en pesos mayor que cero.'));
-  out.objetivo = m.objetivo;
-  if (!esFechaISO(m.fechaLimite)) ctx.error(`${ruta}.fechaLimite`, 'La fecha límite no es válida.');
-  out.fechaLimite = m.fechaLimite;
+  // RONDA-USUARIO-A: el objetivo y la fecha límite son opcionales. Sin objetivo es un "ahorro libre" (solo acumula, sin aporte sugerido)
+  // y entonces tampoco hay fecha. Los datos anteriores (objetivo y fecha siempre presentes) siguen siendo válidos.
+  if (m.objetivo === null) {
+    out.objetivo = null;
+    if (m.fechaLimite !== undefined && m.fechaLimite !== null) ctx.error(`${ruta}.fechaLimite`, 'Una meta sin monto objetivo no puede tener fecha límite.');
+    out.fechaLimite = null;
+  } else {
+    if (!esPesosValido(m.objetivo, { min: 1, max: MAX_PESOS })) ctx.error(`${ruta}.objetivo`, mensajePesos(m.objetivo, 'El objetivo debe ser un entero en pesos mayor que cero.'));
+    out.objetivo = m.objetivo;
+    if (m.fechaLimite === null) out.fechaLimite = null;
+    else {
+      if (!esFechaISO(m.fechaLimite)) ctx.error(`${ruta}.fechaLimite`, 'La fecha límite no es válida.');
+      out.fechaLimite = m.fechaLimite;
+    }
+  }
+  if (m.color !== undefined && m.color !== null) {
+    if (esUno(m.color, COLORES_META)) out.color = m.color;
+    else ctx.aviso(`${ruta}.color`, 'Color desconocido; se usó el de la app.');
+  }
   if (m.cuentaId !== undefined && m.cuentaId !== null && !esId(m.cuentaId)) ctx.error(`${ruta}.cuentaId`, 'Cuenta inválida.');
   out.cuentaId = m.cuentaId ?? null;
   out.icono = icono(ctx, `${ruta}.icono`, m.icono ?? 'escudo');
@@ -609,7 +671,7 @@ export function validarMovimiento(raw, refs, ctx, ruta = 'movimiento') {
     if (c.tipo !== tipoCat) ctx.error(`${ruta}.categoriaId`, `La categoría debe ser de ${tipoCat}.`);
     else if (vinculos === null ? c.vinculo !== null : !vinculos.includes(c.vinculo)) {
       ctx.error(`${ruta}.categoriaId`, vinculos === null ? 'Esa categoría es automática y no admite gastos manuales.' : 'La categoría no corresponde a este tipo de movimiento.');
-    }
+    } else if (vinculos === null && c.metaId) ctx.error(`${ruta}.categoriaId`, 'Esa categoría es la barra de presupuesto de una meta de ahorro: se llena con aportes, no con gastos.');
     return c;
   };
   const deuda = (campo) => {
@@ -676,7 +738,10 @@ export function validarMovimiento(raw, refs, ctx, ruta = 'movimiento') {
       const a = cuenta('cuentaId');
       const b = cuenta('cuentaDestinoId', { nulo: true });
       if (entrada.cuentaDestinoId && entrada.cuentaDestinoId === entrada.cuentaId) ctx.error(`${ruta}.cuentaDestinoId`, 'La cuenta de origen y la de destino deben ser distintas.');
-      categoria('gasto', ['metas']);
+      // RONDA-USUARIO-A: el aporte consume "Ahorro y metas" (vínculo 'metas') o, si la meta tiene su propia barra, la categoría de esa meta.
+      const catAporte = typeof entrada.categoriaId === 'string' ? refs.categorias.get(entrada.categoriaId) : undefined;
+      if (!catAporte) ctx.error(`${ruta}.categoriaId`, 'La categoría no existe.');
+      else if (catAporte.tipo !== 'gasto' || !(catAporte.vinculo === 'metas' || (catAporte.metaId && catAporte.metaId === entrada.metaId))) ctx.error(`${ruta}.categoriaId`, 'La categoría no corresponde a esta meta.');
       if (a) fechaMin(a.fechaSaldoInicial, a.nombre);
       if (b) fechaMin(b.fechaSaldoInicial, b.nombre);
       out.metaId = entrada.metaId;
@@ -808,7 +873,7 @@ function sumaDeMontos({ ajustes, cuentas, deudas, recurrentes, metas, presupuest
   const sumar = (v) => { if (Number.isSafeInteger(v)) total += Math.abs(v); };
   sumar(ajustes.ingreso?.montoMensual);
   for (const c of cuentas) sumar(c?.saldoInicial);
-  for (const d of deudas) { sumar(d?.saldoInicial); sumar(d?.cuota); }
+  for (const d of deudas) { sumar(d?.saldoInicial); sumar(d?.cuota); sumar(d?.cupo); }
   for (const r of recurrentes) sumar(r?.monto);
   for (const m of metas) sumar(m?.objetivo);
   for (const p of Object.values(presupuestos)) { sumar(p?.ingresoPlaneado); for (const v of Object.values(p?.asignaciones ?? {})) sumar(v); }
@@ -869,9 +934,17 @@ export function validar(obj, opciones = {}) {
   categorias.forEach((c, i) => {
     if (c.vinculo && c.archivada) ctx.error(`categorias[${i}].archivada`, 'Las categorías automáticas no se pueden archivar.');
   });
+  const metasConBarra = new Set();
+  categorias.forEach((c, i) => {
+    if (!c.metaId) return;
+    if (c.tipo !== 'gasto' || c.grupo !== 'ahorro' || c.vinculo !== null) ctx.error(`categorias[${i}].metaId`, 'Solo una categoría de gasto del grupo ahorro puede ser la barra de una meta.');
+    if (!refs.metas.has(c.metaId)) ctx.error(`categorias[${i}].metaId`, 'La meta vinculada no existe.');
+    if (metasConBarra.has(c.metaId)) ctx.error(`categorias[${i}].metaId`, 'Una meta no puede tener dos categorías de presupuesto.');
+    metasConBarra.add(c.metaId);
+  });
   recurrentes.forEach((r, i) => {
     const c = refs.categorias.get(r.categoriaId);
-    if (!c || c.tipo !== r.tipo || c.vinculo !== null) ctx.error(`recurrentes[${i}].categoriaId`, 'La categoría no existe o no corresponde al tipo.');
+    if (!c || c.tipo !== r.tipo || c.vinculo !== null || c.metaId) ctx.error(`recurrentes[${i}].categoriaId`, 'La categoría no existe o no corresponde al tipo.');
     const cu = refs.cuentas.get(r.cuentaId);
     if (!cu || (r.tipo === 'ingreso' && cu.tipo === 'credito')) ctx.error(`recurrentes[${i}].cuentaId`, 'La cuenta no existe o no admite ingresos.');
   });
