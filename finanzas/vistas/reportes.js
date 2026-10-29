@@ -2,12 +2,13 @@
  * reportes.js — gasto por categoría, tendencia de 6 ciclos, tasa de ahorro (P6: junto a "ahorro y metas ejecutado") y patrimonio.
  * Definiciones: logica/reportes.js. "Herramienta personal de seguimiento; no constituye asesoría financiera."
  */
-import { h, crearVista, pesos, porcentaje, nombreCiclo, estadoVacio, segmentado, cantidad } from './comun.js';
+import { h, icono, crearVista, pesos, porcentaje, nombreCiclo, estadoVacio, segmentado, cantidad, estiloIconoColor } from './comun.js';
 import { barras, anillo } from '../../shared/ui/graficos.js';
 import { formatearPesosCorto } from '../../shared/lib/dinero.js';
 import { formatearFecha } from '../../shared/lib/fechas.js';
 import { estadoCiclo, etiquetaRango } from '../logica/periodo.js';
 import { ciclosRecientes, gastoPorCategoria, tasaDeAhorro, tendencia, patrimonioHoy } from '../logica/reportes.js';
+import { gastoPorCuenta } from '../logica/saldos.js';
 
 export function montar(raiz, ctx) {
   const estado = { n: 1 };
@@ -39,8 +40,22 @@ function dibujar(ctx, estado, redibujar) {
       ? gasto.filas.map((f) => h('div', { class: 'cat-bar' },
         h('div', { class: 'budget-line__row' }, h('span', { class: 'budget-line__name' }, f.categoria.nombre), h('span', { class: 'budget-line__amt' }, h('b', null, pesos(f.monto)), ` · ${porcentaje(f.fraccion)}`)),
         h('div', { class: 'bar', role: 'img', aria: { label: `${f.categoria.nombre} ${porcentaje(f.fraccion)}` } }, h('div', { class: 'bar__fill', style: { '--p': `${(f.fraccion * 100).toFixed(1)}%` } }))))
-      : estadoVacio({ icono: 'bars', titulo: 'Sin gastos todavía', texto: 'Cuando registres gastos verás aquí en qué se va el dinero.' }),
-    h('p', { class: 't-caption', style: { marginTop: 'var(--sp-2)' } }, 'Incluye necesidades y gustos (también el pago de deudas). El ahorro y las metas se reportan aparte.')));
+      : estadoVacio({ icono: 'bars', titulo: 'Sin gastos todavía', texto: `Cuando registres gastos verás aquí en qué se va el dinero.${gasto.sinGastos.length ? ` Sin gastos en este periodo: ${gasto.sinGastos.map((c) => c.nombre).join(', ')}.` : ''}` }), // un solo mensaje (antes eran dos redundantes)
+    gasto.filas.length && gasto.sinGastos.length ? h('p', { class: 't-caption', style: { marginTop: 'var(--sp-2)' } }, `Sin gastos en este periodo: ${gasto.sinGastos.map((c) => c.nombre).join(', ')}.`) : null,
+    h('p', { class: 't-caption', style: { marginTop: 'var(--sp-2)' } }, 'Incluye necesidades y gustos (también el pago de deudas) y las categorías de ahorro propias a las que registres gastos (son consumo). Los aportes a metas y el abono extra se reportan aparte como ahorro.')));
+
+  // Gasto por cuenta o método de pago (cada cuenta es un método; una compra con tarjeta cuenta en la tarjeta). Ronda del usuario B.
+  const porCuenta = gastoPorCuenta(datos, ciclos, hoy);
+  if (porCuenta.filas.length) {
+    nodos.push(h('section', { class: 'card', aria: { labelledby: 'rcu-t' } },
+      h('div', { class: 'card__head' },
+        h('div', null, h('span', { class: 't-label' }, 'Gasto por cuenta o método de pago'), h('h2', { class: 't-h num', id: 'rcu-t' }, pesos(porCuenta.total))),
+        h('span', { class: 'badge' }, ciclos.length === 1 ? nombreCiclo(ciclos[0], est.historial).toLowerCase() : `últimos ${ciclos.length} ciclos`)),
+      porCuenta.filas.map((f) => h('div', { class: 'cat-bar' },
+        h('div', { class: 'budget-line__row' }, h('span', { class: 'budget-line__name', style: { display: 'inline-flex', alignItems: 'center', gap: '8px' } }, h('span', { class: 'item__icon', style: { ...(estiloIconoColor(f.cuenta.color) ?? {}), width: '28px', height: '28px' }, aria: { hidden: 'true' } }, icono(f.cuenta.icono)), f.cuenta.nombre), h('span', { class: 'budget-line__amt' }, h('b', null, pesos(f.monto)), ` · ${porcentaje(f.fraccion)}`)),
+        h('div', { class: 'bar', role: 'img', aria: { label: `${f.cuenta.nombre} ${porcentaje(f.fraccion)}` } }, h('div', { class: 'bar__fill', style: { '--p': `${(f.fraccion * 100).toFixed(1)}%` } })))),
+      h('p', { class: 't-caption', style: { marginTop: 'var(--sp-2)' } }, 'Solo gastos: con una tarjeta de crédito la compra cuenta cuando se hace y su pago posterior no se vuelve a sumar. Las transferencias entre cuentas no son gasto.')));
+  }
 
   // Tendencia
   const maxV = Math.max(1, ...filas.map((f) => f.gastado));
@@ -66,7 +81,7 @@ function dibujar(ctx, estado, redibujar) {
       h('div', { style: { display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--sp-2)' } }, anilloAhorro(Math.max(0, ahorro.ahorroEjecutadoPct ?? 0), `Ahorro y metas ejecutado ${porcentaje(ahorro.ahorroEjecutadoPct)} del ingreso`, porcentaje(ahorro.ahorroEjecutadoPct)), h('span', { class: 't-small', style: { fontWeight: '600' } }, 'Ahorro y metas ejecutado'))),
     ahorro.tasa === null
       ? h('p', { class: 't-caption', style: { marginTop: 'var(--sp-3)' } }, 'Sin ingresos registrados en este ciclo: la tasa de ahorro aparece cuando registres tu salario. "Ahorro y metas ejecutado" se mide sobre el ingreso planeado y es la misma cifra que muestran Inicio y Presupuesto.')
-      : h('p', { class: 't-caption', style: { marginTop: 'var(--sp-3)' } }, h('b', null, 'Por qué difieren: '), `la tasa (ingreso − consumo) ÷ ingreso cuenta también como ahorro el capital que pagas a deudas (${pesos(ahorro.capital)}) y lo que aún no gastas (${pesos(ahorro.sinGastar)}), además de los aportes a metas (${pesos(ahorro.aportes)}). "Ahorro y metas ejecutado" mide el grupo de ahorro del presupuesto, es decir, los aportes a metas y el capital del abono extra a deudas: ${pesos(ahorro.ahorroEjecutado)} de ${pesos(ahorro.ingreso)}; su plan es ${porcentaje(ahorro.ahorroPlanPct)}. Es la misma cifra que muestran Inicio y Presupuesto. Los intereses del abono cuentan como consumo, no como ahorro.`),
+      : h('p', { class: 't-caption', style: { marginTop: 'var(--sp-3)' } }, h('b', null, 'Por qué difieren: '), `la tasa (ingreso − consumo) ÷ ingreso cuenta también como ahorro el capital que pagas a deudas (${pesos(ahorro.capital)}) y lo que aún no gastas (${pesos(ahorro.sinGastar)}), además de los aportes a metas (${pesos(ahorro.aportes)}). "Ahorro y metas ejecutado" mide los aportes a metas y el capital del abono extra a deudas: ${pesos(ahorro.ahorroEjecutado)} de ${pesos(ahorro.ingreso)}; su plan es ${porcentaje(ahorro.ahorroPlanPct)}. Es la misma cifra que muestran Inicio y Presupuesto. Los intereses del abono cuentan como consumo, no como ahorro. Lo mismo vale para lo que gastes en una categoría de ahorro propia (por ejemplo "Vacaciones"): es consumo y no suma al ahorro ejecutado.`),
     h('p', { class: 't-caption', style: { marginTop: 'var(--sp-2)' } }, `Consumo del ciclo (gastos + intereses): ${pesos(ahorro.consumo)}. El capital de deudas y los aportes a metas no son consumo.`)));
 
   // Patrimonio

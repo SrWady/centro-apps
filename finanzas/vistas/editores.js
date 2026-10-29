@@ -2,46 +2,64 @@
  * editores.js — hojas de edición de categorías y pagos recurrentes (Ajustes).
  * Las categorías automáticas (Pago de deudas, Abono extra, Ahorro y metas) solo cambian de nombre e ícono.
  */
-import { h, icono, poner, ejecutar, boton, campoPesos, segmentado, abrirSelector, mostrarAviso, interruptor, GRUPOS_TITULO, recuperarFoco, unSoloEnvio } from './comun.js';
+import { h, icono, poner, ejecutar, boton, campoPesos, segmentado, abrirSelector, mostrarAviso, interruptor, GRUPOS_TITULO, recuperarFoco, unSoloEnvio, haptic, pesos, nombreIcono } from './comun.js';
 import { respaldarAntesDe, TEXTO_RESPALDO_REASIGNAR } from './datos.js';
 import { abrirHoja, confirmar } from '../../shared/ui/hoja.js';
 import { CLAVES_ICONO_CATEGORIA } from '../../shared/ui/iconos.js';
-import { guardarCategoria, archivarCategoria, guardarRecurrente, borrarRecurrente, reasignarCategoria, usosDeCategoria } from '../logica/acciones.js';
+import { guardarCategoria, archivarCategoria, borrarCategoria, guardarRecurrente, borrarRecurrente, reasignarCategoria, usosDeCategoria } from '../logica/acciones.js';
+import { estadoCiclo } from '../logica/periodo.js';
 
 const DIAS_SEMANA = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
-const nombreIcono = (c) => c.charAt(0).toUpperCase() + c.slice(1);
 
-/** Lista de categorías agrupada, con alta, edición y archivado. */
-export function abrirCategorias(ctx) {
+/**
+ * Lista de categorías agrupada, con alta, edición, archivado y eliminación. Cada categoría de gasto muestra lo asignado en el ciclo actual.
+ * `alCambiar` (opcional) se llama al guardar algo (p. ej. para redibujar Ajustes).
+ */
+export function abrirCategorias(ctx, alCambiar) {
   const cuerpo = h('div', { class: 'sheet__body stack' });
   const dibujar = () => {
     const datos = ctx.tienda.datos();
+    const est = estadoCiclo(datos, ctx.reloj.hoy());
+    const asignaciones = datos.presupuestos[est.ciclo]?.asignaciones ?? {};
+    const metaPorId = new Map(datos.metas.map((m) => [m.id, m]));
     const grupo = (titulo, cats) => cats.length ? [h('span', { class: 't-label' }, titulo), h('div', { class: 'list' }, cats.map((c) => h('button', { class: 'item', type: 'button', on: { click: () => abrirEditorCategoria(ctx, c, redibujar) }, aria: { label: `Editar categoría ${c.nombre}` } },
       h('span', { class: 'item__icon' }, icono(c.icono)),
-      h('span', { class: 'item__main' }, h('span', { class: 'item__title', style: { display: 'block' } }, c.nombre, c.archivada ? [' ', h('span', { class: 'badge' }, 'Archivada')] : null, c.vinculo ? [' ', h('span', { class: 'badge badge--info' }, 'Automática')] : null)),
+      h('span', { class: 'item__main' },
+        h('span', { class: 'item__title', style: { display: 'block' } }, c.nombre, c.archivada ? [' ', h('span', { class: 'badge' }, 'Archivada')] : null, c.vinculo ? [' ', h('span', { class: 'badge badge--info' }, 'Automática')] : null, c.metaId ? [' ', h('span', { class: 'badge badge--accent' }, 'Meta')] : null),
+        c.metaId && metaPorId.get(c.metaId) ? h('span', { class: 'item__sub', style: { display: 'block' } }, `Presupuesto de la meta ${metaPorId.get(c.metaId).nombre}`) : null),
+      c.tipo === 'gasto' && asignaciones[c.id] !== undefined ? h('span', { class: 'item__end money' }, pesos(asignaciones[c.id])) : null,
       icono('chevron-right'))))] : [];
     const ordenadas = [...datos.categorias].sort((a, b) => a.orden - b.orden);
-    poner(cuerpo, 
+    poner(cuerpo,
+      boton('Agregar categoría', { icono: 'plus', clase: 'btn--block', onClick: () => abrirEditorCategoria(ctx, null, redibujar) }),
       ...grupo('Necesidades', ordenadas.filter((c) => c.tipo === 'gasto' && c.grupo === 'necesidades')),
       ...grupo('Gustos', ordenadas.filter((c) => c.tipo === 'gasto' && c.grupo === 'gustos')),
       ...grupo('Ahorro', ordenadas.filter((c) => c.tipo === 'gasto' && c.grupo === 'ahorro')),
       ...grupo('Ingresos', ordenadas.filter((c) => c.tipo === 'ingreso')),
-      boton('Agregar categoría', { icono: 'plus', clase: 'btn--secondary btn--block', onClick: () => abrirEditorCategoria(ctx, null, redibujar) }));
+      h('p', { class: 'field__hint' }, 'El monto a la derecha es lo asignado en el ciclo actual; se edita en Presupuesto. Una categoría nueva aparece de inmediato al registrar movimientos, en Presupuesto, en los filtros de Movimientos y en Reportes.'));
   };
   // La lista se reconstruye al guardar: el foco vuelve a la hoja (si no, Esc dejaría de funcionar con el teclado).
-  const redibujar = () => { dibujar(); if (hoja.panel.isConnected) hoja.panel.focus({ preventScroll: true }); };
+  const redibujar = () => { dibujar(); if (alCambiar) alCambiar(); if (hoja.panel.isConnected) hoja.panel.focus({ preventScroll: true }); };
   dibujar();
   const hoja = abrirHoja([cuerpo], { titulo: 'Categorías' });
   return hoja;
 }
 
-function abrirEditorCategoria(ctx, categoria, alGuardar) {
+/** Hoja de alta o edición de una categoría: nombre, grupo, ícono y monto asignado (alta). Mensajes de error junto al campo. */
+export function abrirEditorCategoria(ctx, categoria, alGuardar) {
   const nueva = !categoria;
   // H-07: al archivar, la hoja de confirmación y el editor se cierran con ~300 ms de diferencia y el último en cerrarse devuelve el
   // foco a un botón que ya no existe: Esc dejaba de cerrar la lista de categorías. Se reasigna el foco cuando ambas ya se fueron.
   const luego = () => { alGuardar(); setTimeout(recuperarFoco, 350); };
+  const datos0 = ctx.tienda.datos();
+  const meta = categoria?.metaId ? datos0.metas.find((m) => m.id === categoria.metaId) : null;
   const est = { tipo: categoria?.tipo ?? 'gasto', grupo: categoria?.grupo ?? 'gustos', icono: categoria?.icono ?? 'otro' };
-  const nombre = h('input', { class: 'input', type: 'text', value: categoria?.nombre ?? '', attrs: { maxlength: 40, 'aria-label': 'Nombre de la categoría', autocomplete: 'off', placeholder: 'Ej.: Mascotas' } });
+  const nombre = h('input', { class: 'input', type: 'text', value: categoria?.nombre ?? '', attrs: { maxlength: 40, 'aria-label': 'Nombre de la categoría', autocomplete: 'off', placeholder: 'Ej.: Compras' } });
+  const errorNombre = h('p', { class: 'field__hint danger', role: 'alert' });
+  errorNombre.hidden = true;
+  const decir = (texto) => { errorNombre.textContent = texto ?? ''; errorNombre.hidden = !texto; nombre.setAttribute('aria-invalid', texto ? 'true' : 'false'); if (texto) { haptic('error'); nombre.focus(); } };
+  nombre.addEventListener('input', () => { if (!errorNombre.hidden) decir(''); });
+  const asignado = campoPesos({ etiqueta: 'Monto asignado por ciclo (opcional)', valor: null, id: 'c-asig', ayuda: 'Se asigna al ciclo actual y a los ciclos futuros que ya existan; los próximos lo heredan al copiarse. Puedes cambiarlo en Presupuesto.' });
   const zona = h('div', { class: 'stack stack--lg' });
   const chipIcono = h('button', { class: 'chip', type: 'button' });
   chipIcono.addEventListener('click', async () => {
@@ -49,35 +67,53 @@ function abrirEditorCategoria(ctx, categoria, alGuardar) {
     if (v) { est.icono = v; pintar(); }
   });
   const pintar = () => {
-    chipIcono.replaceChildren(icono(est.icono), 'Ícono');
-    poner(zona, 
+    chipIcono.replaceChildren(icono(est.icono), `Ícono: ${nombreIcono(est.icono)}`);
+    poner(zona,
       nueva ? segmentado({ etiqueta: 'Tipo de categoría', valor: est.tipo, opciones: [{ valor: 'gasto', titulo: 'Gasto' }, { valor: 'ingreso', titulo: 'Ingreso' }], alCambiar: (v) => { est.tipo = v; pintar(); } }) : null,
       est.tipo === 'gasto' && !categoria?.vinculo
-        ? h('div', { class: 'stack stack--sm' }, h('span', { class: 'field__label' }, 'Grupo del presupuesto'), segmentado({ etiqueta: 'Grupo', valor: est.grupo, opciones: ['necesidades', 'gustos', 'ahorro'].map((g) => ({ valor: g, titulo: GRUPOS_TITULO[g] })), alCambiar: (v) => { est.grupo = v; pintar(); } }), h('p', { class: 'field__hint' }, 'Cambiar el grupo afecta también los reportes de ciclos pasados.'))
+        ? h('div', { class: 'stack stack--sm' }, h('span', { class: 'field__label' }, 'Grupo del presupuesto'), segmentado({ etiqueta: 'Grupo', valor: est.grupo, opciones: ['necesidades', 'gustos', 'ahorro'].map((g) => ({ valor: g, titulo: GRUPOS_TITULO[g] })), alCambiar: (v) => { est.grupo = v; pintar(); } }), h('p', { class: 'field__hint' }, nueva ? 'Necesidades (lo indispensable), Gustos (lo que disfrutas) o Ahorro (lo que apartas).' : 'Cambiar el grupo afecta también los reportes de ciclos pasados.'))
         : null,
-      h('div', { class: 'chip-row' }, chipIcono),
+      h('div', { class: 'field' }, h('span', { class: 'field__label' }, 'Ícono'), h('div', { class: 'chip-row' }, chipIcono)),
+      nueva && est.tipo === 'gasto' ? asignado.el : null,
       categoria?.vinculo ? h('p', { class: 'field__hint' }, 'Es una categoría automática: solo puedes cambiar su nombre e ícono.') : null);
     recuperarFoco(); // el segmentado de grupo/tipo se reconstruye: el foco no puede quedar en <body>
   };
   pintar();
+
   const guardar = boton(nueva ? 'Agregar categoría' : 'Guardar cambios', {
     icono: 'check', clase: 'btn--lg btn--block',
     // R2F-09: un doble toque (la hoja tarda ~300 ms en cerrarse) creaba dos categorías iguales.
     onClick: unSoloEnvio(() => {
-      const r = ejecutar(ctx, guardarCategoria, { categoria: nueva ? { nombre: nombre.value, tipo: est.tipo, grupo: est.grupo, icono: est.icono } : { id: categoria.id, nombre: nombre.value, grupo: est.grupo, icono: est.icono } }, { exito: nueva ? 'Categoría agregada' : 'Categoría actualizada' });
-      if (r.ok) { hoja.cerrar(); luego(); }
-      return r.ok;
+      const payload = nueva
+        ? { nombre: nombre.value, tipo: est.tipo, grupo: est.grupo, icono: est.icono, ...(est.tipo === 'gasto' && asignado.valor() ? { asignacion: asignado.valor() } : {}) }
+        : { id: categoria.id, nombre: nombre.value, grupo: est.grupo, icono: est.icono };
+      const r = ctx.tienda.ejecutar(guardarCategoria, { categoria: payload });
+      if (!r.ok) { decir(r.mensaje || 'No se pudo guardar.'); return false; }
+      mostrarAviso(nueva ? `Categoría "${nombre.value.trim()}" agregada` : 'Categoría actualizada', { tipo: 'ok' });
+      hoja.cerrar();
+      luego();
+      return true;
     }),
   });
-  const archivar = nueva || categoria.vinculo ? null : boton(categoria.archivada ? 'Restaurar' : 'Archivar', { icono: categoria.archivada ? 'restore' : 'trash', clase: 'btn--secondary', onClick: async () => {
+
+  // Acciones sobre una categoría existente: archivar/restaurar, eliminar (solo si nunca se usó) y reasignar (si tiene historia).
+  const datosUso = nueva ? null : usosDeCategoria(datos0, categoria.id);
+  const sinUso = !nueva && !categoria.vinculo && !categoria.metaId && datosUso.movimientos === 0 && datosUso.recurrentes === 0 && !datosUso.ingreso;
+  const archivar = nueva || categoria.vinculo || categoria.metaId ? null : boton(categoria.archivada ? 'Restaurar' : 'Archivar', { icono: categoria.archivada ? 'restore' : 'trash', clase: 'btn--secondary btn--block', onClick: async () => {
     if (!categoria.archivada) { const ok = await confirmar({ titulo: '¿Archivar esta categoría?', mensaje: 'Dejará de ofrecerse al registrar movimientos y no se copiará a los próximos presupuestos. Sus movimientos se conservan.', confirmar: 'Archivar' }); if (!ok) return; }
     const r = ejecutar(ctx, archivarCategoria, { id: categoria.id, archivada: !categoria.archivada }, { exito: categoria.archivada ? 'Categoría restaurada' : 'Categoría archivada' });
+    if (r.ok) { hoja.cerrar(); luego(); }
+  } });
+  const eliminar = !sinUso ? null : boton('Eliminar', { icono: 'trash', clase: 'btn--danger-ghost btn--block', onClick: async () => {
+    const ok = await confirmar({ titulo: `¿Eliminar "${categoria.nombre}"?`, mensaje: 'Nunca se usó en un movimiento. Se quita del presupuesto del ciclo actual y de los siguientes; los ciclos que ya cerraron no cambian (si tuviera un monto en alguno, se archiva en vez de eliminarse). Esta acción no se puede deshacer; si prefieres conservarla, archívala.', confirmar: 'Eliminar', peligro: true });
+    if (!ok) return;
+    const r = ejecutar(ctx, borrarCategoria, { id: categoria.id }, { exito: 'Categoría eliminada' });
     if (r.ok) { hoja.cerrar(); luego(); }
   } });
   // Q12: con movimientos, además de archivar se pueden REASIGNAR a otra categoría (con confirmación) y la de origen se archiva.
   async function reasignar() {
     const datos = ctx.tienda.datos();
-    const destinos = datos.categorias.filter((c) => c.id !== categoria.id && c.tipo === categoria.tipo && c.vinculo === null && !c.archivada);
+    const destinos = datos.categorias.filter((c) => c.id !== categoria.id && c.tipo === categoria.tipo && c.vinculo === null && !c.metaId && !c.archivada);
     if (!destinos.length) { mostrarAviso('No hay otra categoría activa del mismo tipo. Agrega una primero.', { tipo: 'warn' }); return; }
     const hacia = await abrirSelector({ titulo: 'Reasignar a la categoría', opciones: destinos.map((c) => ({ valor: c.id, titulo: c.nombre, sub: c.grupo ? GRUPOS_TITULO[c.grupo] : undefined, icono: c.icono })) });
     if (!hacia) return;
@@ -95,10 +131,13 @@ function abrirEditorCategoria(ctx, categoria, alGuardar) {
     const r = ejecutar(ctx, reasignarCategoria, { desdeId: categoria.id, haciaId: hacia }, { exito: 'Categoría reasignada y archivada' });
     if (r.ok) { hoja.cerrar(); luego(); }
   }
-  const usada = !nueva && !categoria.vinculo && !categoria.archivada && (() => { const u = usosDeCategoria(ctx.tienda.datos(), categoria.id); return u.movimientos > 0 || u.recurrentes > 0 || u.ciclosConPresupuesto > 0 || u.ingreso; })();
-  const reasignarBtn = usada ? boton('Reasignar movimientos a otra categoría', { icono: 'swap', clase: 'btn--secondary', onClick: () => reasignar() }) : null;
-  const cuerpo = h('div', { class: 'sheet__body stack stack--lg' }, h('div', { class: 'field' }, h('label', { class: 'field__label' }, 'Nombre'), nombre), zona, reasignarBtn);
-  const hoja = abrirHoja([cuerpo, h('div', { class: 'sheet__foot' }, archivar, guardar)], { titulo: nueva ? 'Agregar categoría' : `Editar ${categoria.nombre}` });
+  const usada = !nueva && !categoria.vinculo && !categoria.metaId && !categoria.archivada && (datosUso.movimientos > 0 || datosUso.recurrentes > 0 || datosUso.ciclosConPresupuesto > 0 || datosUso.ingreso);
+  const reasignarBtn = usada ? boton('Reasignar movimientos a otra categoría', { icono: 'swap', clase: 'btn--secondary btn--block', onClick: () => reasignar() }) : null;
+  const irAMetas = !categoria?.metaId ? null : boton('Ir a Metas', { icono: 'target', clase: 'btn--secondary btn--block', onClick: () => { hoja.cerrar(); location.hash = '#/metas'; } });
+  const cuerpo = categoria?.metaId
+    ? h('div', { class: 'sheet__body stack stack--lg' }, h('div', { class: 'callout callout--accent' }, icono('info'), h('div', null, h('span', { class: 'callout__title' }, `Presupuesto de la meta ${meta ? meta.nombre : 'de ahorro'}`), h('br'), 'Esta barra se llena con los aportes de la meta. Su nombre, ícono y archivado se cambian desde Metas; el monto mensual, en Presupuesto.')), irAMetas)
+    : h('div', { class: 'sheet__body stack stack--lg' }, h('div', { class: 'field' }, h('label', { class: 'field__label' }, 'Nombre'), nombre, errorNombre), zona, reasignarBtn, archivar, eliminar);
+  const hoja = abrirHoja([cuerpo, categoria?.metaId ? null : h('div', { class: 'sheet__foot' }, guardar)], { titulo: nueva ? 'Agregar categoría' : `Editar ${categoria.nombre}` });
 }
 
 /** Editor de un pago recurrente (crear o editar). alGuardar() redibuja la lista de Ajustes. */

@@ -7,17 +7,18 @@
  *    con la acción marcarPagado (la fecha programada queda en origen.ocurrencia).
  *  - con movimiento: edita (y permite eliminar).
  */
-import { h, icono, ejecutar, haptic, mostrarAviso, boton, abrirSelector, pedirMonto, pedirFecha, pedirTexto, pesos, fechaCorta, diaMes, segmentado, GRUPOS_TITULO, teclaDeMonto, DIGITOS_TECLADO_MONTO, mensajeTopeMonto, pasaTopeMonto } from './comun.js';
+import { h, icono, ejecutar, haptic, mostrarAviso, boton, abrirSelector, pedirMonto, pedirFecha, pedirTexto, pesos, fechaCorta, diaMes, segmentado, GRUPOS_TITULO, confirmarSaldoNegativo, confirmarRiesgo, frasesDeAvisoSaldo, teclaDeMonto, DIGITOS_TECLADO_MONTO, mensajeTopeMonto, pasaTopeMonto, cuentasPorTipo, TIPOS_CUENTA_INFO } from './comun.js';
 import { abrirHoja, confirmar } from '../../shared/ui/hoja.js';
 import { crearTeclado, formatoTecleado } from '../../shared/ui/teclado.js';
-import { agregarMovimiento, editarMovimiento, borrarMovimiento, marcarPagado } from '../logica/acciones.js';
+import { agregarMovimiento, editarMovimiento, borrarMovimiento, marcarPagado, avisosDeSaldo } from '../logica/acciones.js';
 import { fechaPorDefecto } from '../logica/periodo.js';
+import { ahorrado, categoriaParaAporte } from '../logica/metas.js';
 import { calcularSaldos } from '../logica/saldos.js';
 import { interesPeriodo } from '../logica/deudas.js';
 import { tasaMensual } from '../logica/tasas.js';
 import { sumarDias } from '../../shared/lib/fechas.js';
 
-const TIPOS_BASICOS = ['gasto', 'ingreso', 'transferencia'];
+const TIPOS_BASICOS = ['gasto', 'ingreso', 'transferencia', 'aporteMeta'];
 const TITULOS = {
   gasto: 'Agregar gasto', ingreso: 'Agregar ingreso', transferencia: 'Transferir', pagoDeuda: 'Registrar pago de deuda',
   aporteMeta: 'Aportar a una meta', retiroMeta: 'Retirar de una meta', ajusteCuenta: 'Ajustar saldo de cuenta', ajusteDeuda: 'Ajustar saldo de deuda',
@@ -30,16 +31,39 @@ const GUARDADO = {
 const noArchivada = (x) => !x.archivada;
 const esCredito = (c) => c.tipo === 'credito';
 
-/** Categorías de gasto sin vínculo, ordenadas por uso en los últimos 90 días (y luego por orden). */
+/** RU-08: cuántas categorías nuevas (creadas por el usuario y todavía sin ningún movimiento) se ofrecen PRIMERO en la hoja "+": las 3 más recientes. */
+export const MAX_CATEGORIAS_NUEVAS_PRIMERO = 3;
+/** Cuántos chips de categoría se ven sin tocar "Más". */
+export const CHIPS_CATEGORIA_VISIBLES = 6;
+
+/**
+ * Categorías del tipo dado (sin vínculo ni barra de meta, no archivadas) en el orden de la hoja "+":
+ *  1. Las categorías NUEVAS sin uso van primero, pero solo hasta 3 (MAX_CATEGORIAS_NUEVAS_PRIMERO): las 3 más recientes (por `creadaEn` y, a igual
+ *     fecha, la creada después). "Nueva sin uso" = la creó el usuario (tiene `creadaEn`) y todavía no tiene NINGÚN movimiento ni pago recurrente, de
+ *     cualquier fecha: sin plazo en días (ya no se hunde a los 30 días tras "Más"); deja de ser nueva en cuanto se usa.
+ *  2. El resto, por uso en los últimos 90 días (y luego sin pago recurrente activo, y por `orden`).
+ * Con 6 chips visibles, las nuevas nunca desplazan a las 3 más usadas: ocupan a lo sumo 3 lugares y quedan al menos 3 por uso. Antes (ronda A),
+ * TODAS las nuevas iban primero: crear 7 categorías escondía tras "Más" la más usada (RU-08).
+ */
 export function categoriasPorUso(datos, tipo, hoy) {
   const desde = sumarDias(hoy, -90);
   const usos = {};
-  for (const m of datos.movimientos) if (m.tipo === tipo && m.fecha >= desde) usos[m.categoriaId] = (usos[m.categoriaId] ?? 0) + 1;
-  // Sin historial de uso, primero las categorías que NO tienen un pago recurrente activo (esos se marcan con "Pagado").
-  const conRecurrente = new Set(datos.recurrentes.filter((r) => r.activo).map((r) => r.categoriaId));
-  return datos.categorias
-    .filter((c) => c.tipo === tipo && c.vinculo === null && noArchivada(c))
+  const usadas = new Set();
+  for (const m of datos.movimientos) {
+    if (m.categoriaId) usadas.add(m.categoriaId);
+    if (m.tipo === tipo && m.fecha >= desde) usos[m.categoriaId] = (usos[m.categoriaId] ?? 0) + 1;
+  }
+  const conRecurrente = new Set(datos.recurrentes.filter((r) => r.activo).map((r) => r.categoriaId)); // sin historial de uso, primero las que NO tienen un recurrente activo (esos se marcan con "Pagado")
+  const lista = datos.categorias.filter((c) => c.tipo === tipo && c.vinculo === null && !c.metaId && noArchivada(c));
+  const nuevas = lista
+    .filter((c) => c.creadaEn !== undefined && !usadas.has(c.id) && !conRecurrente.has(c.id))
+    .sort((a, b) => (a.creadaEn < b.creadaEn ? 1 : a.creadaEn > b.creadaEn ? -1 : b.orden - a.orden))
+    .slice(0, MAX_CATEGORIAS_NUEVAS_PRIMERO);
+  const primeras = new Set(nuevas.map((c) => c.id));
+  const resto = lista
+    .filter((c) => !primeras.has(c.id))
     .sort((a, b) => (usos[b.id] ?? 0) - (usos[a.id] ?? 0) || Number(conRecurrente.has(a.id)) - Number(conRecurrente.has(b.id)) || a.orden - b.orden);
+  return [...nuevas, ...resto];
 }
 
 function estadoInicial(datos, hoy, prefs, o) {
@@ -86,7 +110,7 @@ function completar(est, datos, hoy, prefs) {
     if (!valida(est.metaId, datos.metas)) est.metaId = metas[0]?.id ?? null;
     if (!valida(est.cuentaId, sinCredito)) est.cuentaId = recordada(sinCredito);
     if (est.cuentaDestinoId && (!valida(est.cuentaDestinoId, sinCredito) || est.cuentaDestinoId === est.cuentaId)) est.cuentaDestinoId = null;
-    est.categoriaId = datos.categorias.find((c) => c.vinculo === 'metas')?.id ?? null;
+    est.categoriaId = categoriaParaAporte(datos, est.metaId, est.categoriaId); // la barra propia de la meta o "Ahorro y metas"
   } else if (est.tipo === 'ajusteCuenta') {
     if (!valida(est.cuentaId, sinCredito)) est.cuentaId = recordada(sinCredito);
   } else if (est.tipo === 'ajusteDeuda') {
@@ -124,6 +148,21 @@ function movimientoDesdeEstado(est, ctx) {
   }
 }
 
+/**
+ * Ronda del usuario B: una línea que dice qué pasa con el saldo según la cuenta elegida (cada cuenta es un método de pago).
+ * Gasto con tarjeta de crédito: sube su deuda; gasto en otra cuenta: baja su saldo; ingreso: sube el saldo; transferencia: lo disponible en el origen.
+ */
+export function pistaDeCuenta(datos, est, hoy) {
+  const cuenta = datos.cuentas.find((c) => c.id === est.cuentaId);
+  if (!cuenta) return null;
+  const s = calcularSaldos(datos, hoy);
+  if (est.tipo === 'transferencia') return `${cuenta.nombre} tiene ${pesos(s.cuentas[cuenta.id])} disponibles para transferir.`;
+  if (est.tipo === 'ingreso') return `Sube el saldo de ${cuenta.nombre} (hoy ${pesos(s.cuentas[cuenta.id])}).`;
+  if (est.tipo !== 'gasto') return null;
+  if (cuenta.tipo === 'credito') return `Compra con tarjeta: sube tu deuda (hoy ${pesos(s.deudas[cuenta.deudaId])}), no baja ninguna cuenta. Págala después con "Pagar tarjeta".`;
+  return `Baja el saldo de ${cuenta.nombre} (hoy ${pesos(s.cuentas[cuenta.id])}).`;
+}
+
 /** Abre la hoja. Devuelve el control de la hoja (cerrar()). */
 export function abrirFormulario(ctx, opciones = {}) {
   const datos0 = ctx.tienda.datos();
@@ -135,7 +174,7 @@ export function abrirFormulario(ctx, opciones = {}) {
   if (origenProgramado) est.origen = origenProgramado;
   if (!editando && est.tipo === 'pagoDeuda' && !est.interesManual) est.interes = Math.min(est.interes, est.monto);
   // R1F-07: un movimiento que viene de un pago programado (origen) no cambia de tipo ni de deuda: se ocultan esos selectores.
-  const tiposVisibles = origenProgramado ? null : editando ? (TIPOS_BASICOS.includes(est.tipo) && !est.origen ? TIPOS_BASICOS : null) : opciones.tipo && !TIPOS_BASICOS.includes(opciones.tipo) ? null : TIPOS_BASICOS;
+  const tiposVisibles = origenProgramado ? null : editando ? (TIPOS_BASICOS.includes(est.tipo) && est.tipo !== 'aporteMeta' && !est.origen ? TIPOS_BASICOS : null) : opciones.tipo && !TIPOS_BASICOS.includes(opciones.tipo) ? null : TIPOS_BASICOS;
 
   const datos = () => ctx.tienda.datos();
   const cuentaNombre = (id) => datos().cuentas.find((c) => c.id === id)?.nombre ?? 'Elegir';
@@ -167,7 +206,7 @@ export function abrirFormulario(ctx, opciones = {}) {
   // N-03 / R2F-16: un ingreso programado (el salario) se "recibe", no se "paga".
   let textoGuardar = editando ? 'Guardar cambios' : origenProgramado ? (est.tipo === 'ingreso' ? 'Marcar recibido' : 'Marcar pagado') : opciones.guardarTexto ?? 'Guardar';
   const btnGuardar = boton('', { icono: 'check', clase: 'btn--lg btn--block', onClick: () => guardar() });
-  const pintarBoton = () => { btnGuardar.replaceChildren(icono('check'), document.createTextNode(` ${editando || origenProgramado ? textoGuardar : `Guardar ${est.tipo === 'gasto' ? 'gasto' : est.tipo === 'ingreso' ? 'ingreso' : est.tipo === 'transferencia' ? 'transferencia' : ''}`.trim()}`)); };
+  const pintarBoton = () => { btnGuardar.replaceChildren(icono('check'), document.createTextNode(` ${editando || origenProgramado ? textoGuardar : `Guardar ${est.tipo === 'gasto' ? 'gasto' : est.tipo === 'ingreso' ? 'ingreso' : est.tipo === 'transferencia' ? 'transferencia' : est.tipo === 'aporteMeta' ? 'aporte' : ''}`.trim()}`)); };
   const btnEliminar = editando ? boton('Eliminar', { icono: 'trash', clase: 'btn--danger-ghost', onClick: () => eliminar() }) : null;
   const pie = h('div', { class: 'sheet__foot' }, btnEliminar, btnGuardar);
   const hoja = abrirHoja([cuerpo, pie], { titulo: opciones.titulo ?? (editando ? 'Editar movimiento' : TITULOS[est.tipo]), alCerrar: () => teclado.destruir() });
@@ -192,18 +231,25 @@ export function abrirFormulario(ctx, opciones = {}) {
 
   async function elegirCuenta(campo, { sinCredito = false, titulo = 'Cuenta', permitirNinguna = false } = {}) {
     const s = calcularSaldos(datos(), hoy);
-    const opciones = datos().cuentas.filter((c) => !c.archivada && (!sinCredito || !esCredito(c)))
-      .map((c) => ({ valor: c.id, titulo: c.nombre, icono: c.icono, fin: pesos(esCredito(c) ? -s.deudas[c.deudaId] : s.cuentas[c.id]) }));
+    // Ronda del usuario B: cada cuenta es un método de pago; se muestran todas las activas agrupadas por tipo (Efectivo, Ahorros, Débito, Billetera, Tarjeta).
+    const opciones = cuentasPorTipo(datos().cuentas.filter((c) => !c.archivada && (!sinCredito || !esCredito(c))))
+      .map((c) => ({ valor: c.id, titulo: c.nombre, icono: c.icono, color: c.color, grupo: TIPOS_CUENTA_INFO[c.tipo]?.grupo, sub: esCredito(c) && est.tipo === 'gasto' ? 'La compra sube tu deuda' : undefined, fin: pesos(esCredito(c) ? -s.deudas[c.deudaId] : s.cuentas[c.id]) }));
     if (permitirNinguna) opciones.unshift({ valor: '', titulo: 'Misma cuenta (solo apartar)', sub: 'El dinero queda apartado sin moverse', icono: 'escudo' });
     const v = await abrirSelector({ titulo, opciones, seleccionado: est[campo] ?? '' });
     if (v === undefined) return;
+    if (est.tipo === 'transferencia' && v !== '') {
+      // Ronda del usuario B: en una transferencia el destino no puede ser el origen. Elegir el origen como destino se avisa (no se cambia nada
+      // en silencio); elegir como origen la cuenta que era el destino las intercambia.
+      if (campo === 'cuentaDestinoId' && v === est.cuentaId) { haptic('error'); mostrarAviso('La cuenta de destino debe ser distinta de la de origen. Elige otra o usa "Invertir".', { tipo: 'warn' }); return; }
+      if (campo === 'cuentaId' && v === est.cuentaDestinoId) est.cuentaDestinoId = est.cuentaId;
+    }
     est[campo] = v === '' ? null : v;
     if ((campo === 'cuentaId' || campo === 'cuentaDestinoId') && est.cuentaId && est.cuentaId === est.cuentaDestinoId) est.cuentaDestinoId = null;
     completar(est, datos(), hoy, prefs);
     dibujarCampos();
   }
   async function elegirCategoria() {
-    const cats = datos().categorias.filter((c) => c.tipo === est.tipo && c.vinculo === null && !c.archivada);
+    const cats = datos().categorias.filter((c) => c.tipo === est.tipo && c.vinculo === null && !c.metaId && !c.archivada).sort((a, b) => a.orden - b.orden);
     const opciones = cats.map((c) => ({ valor: c.id, titulo: c.nombre, sub: c.grupo ? GRUPOS_TITULO[c.grupo] : undefined, icono: c.icono }));
     const v = await abrirSelector({ titulo: 'Categoría', opciones, seleccionado: est.categoriaId });
     if (v !== undefined) { est.categoriaId = v; dibujarCampos(); }
@@ -224,8 +270,9 @@ export function abrirFormulario(ctx, opciones = {}) {
     if (v !== undefined) { est.deudaId = v; if (!est.interesManual) est.interes = interesSugerido(est, datos(), hoy); dibujarCampos(); }
   }
   async function elegirMeta() {
-    const v = await abrirSelector({ titulo: 'Meta', opciones: datos().metas.filter(noArchivada).map((m) => ({ valor: m.id, titulo: m.nombre, icono: m.icono })), seleccionado: est.metaId });
-    if (v !== undefined) { est.metaId = v; dibujarCampos(); }
+    const d = datos();
+    const v = await abrirSelector({ titulo: 'Meta de ahorro', opciones: d.metas.filter(noArchivada).map((m) => ({ valor: m.id, titulo: m.nombre, sub: m.objetivo === null ? 'Ahorro libre' : `Objetivo ${pesos(m.objetivo)}`, icono: m.icono, fin: pesos(ahorrado(d, m.id, hoy)) })), seleccionado: est.metaId, vacio: 'Aún no tienes metas de ahorro.' });
+    if (v !== undefined) { est.metaId = v; est.categoriaId = categoriaParaAporte(datos(), v, null); dibujarCampos(); }
   }
   async function elegirInteres() {
     const v = await pedirMonto({ titulo: 'Interés incluido en el pago', mensaje: 'Del extracto: la parte del pago que son intereses. El resto baja el saldo de la deuda.', inicial: est.interes, textoGuardar: 'Listo' });
@@ -251,17 +298,25 @@ export function abrirFormulario(ctx, opciones = {}) {
     const filas = [];
     if (est.tipo === 'gasto' || est.tipo === 'ingreso') {
       const todas = categoriasPorUso(d, est.tipo, hoy);
-      const visibles = todas.slice(0, 6);
+      const visibles = todas.slice(0, CHIPS_CATEGORIA_VISIBLES);
       if (est.categoriaId && !visibles.some((c) => c.id === est.categoriaId)) { const sel = d.categorias.find((c) => c.id === est.categoriaId); if (sel) visibles.unshift(sel); }
       filas.push(fila('Categoría', [
         ...visibles.map((c) => chip(c.nombre, { icono: c.icono, presionado: c.id === est.categoriaId, onClick: () => { est.categoriaId = c.id; dibujarCampos(); haptic('select'); } })),
         ...(todas.length > visibles.length ? [chip('Más', { icono: 'more', onClick: elegirCategoria, etiqueta: 'Más categorías' })] : []),
       ]));
-      filas.push(fila('Cuenta, fecha y nota', [chipCuenta('cuentaId', '', { sinCredito: est.tipo === 'ingreso' }), chipFecha(), chipNota()]));
+      filas.push(fila('Cuenta, fecha y nota', [chipCuenta('cuentaId', '', { sinCredito: est.tipo === 'ingreso', titulo: est.tipo === 'gasto' ? '¿Con qué pagas?' : '¿En qué cuenta entra?' }), chipFecha(), chipNota()]));
+      const pista = pistaDeCuenta(d, est, hoy);
+      if (pista) filas.push(h('p', { class: 'field__hint' }, pista));
     } else if (est.tipo === 'transferencia') {
-      filas.push(fila('Cuentas', [chipCuenta('cuentaId', 'De', { sinCredito: true, titulo: 'Cuenta de origen' }), chipCuenta('cuentaDestinoId', 'A', { sinCredito: true, titulo: 'Cuenta de destino' })]));
-      filas.push(fila('Fecha y nota', [chipFecha(), chipNota()]));
+      filas.push(fila('Cuentas', [chipCuenta('cuentaId', 'De', { sinCredito: true, titulo: 'Cuenta de origen' }), chipCuenta('cuentaDestinoId', 'A', { sinCredito: true, titulo: 'Cuenta de destino' })], true));
+      filas.push(fila('Fecha, nota e invertir', [chipFecha(), chipNota(), chip('Invertir', { icono: 'swap', onClick: () => { const o = est.cuentaId; est.cuentaId = est.cuentaDestinoId; est.cuentaDestinoId = o; dibujarCampos(); haptic('select'); }, etiqueta: 'Invertir origen y destino' })]));
       if (!est.cuentaDestinoId) filas.push(h('p', { class: 'field__hint' }, 'Para transferir necesitas al menos dos cuentas (sin contar tarjetas). Agrega otra en Cuentas.')); // R1F-21b
+      else {
+        const pista = pistaDeCuenta(d, est, hoy);
+        if (pista) filas.push(h('p', { class: 'field__hint' }, pista));
+        filas.push(h('p', { class: 'field__hint' }, '¿Quieres pagar una tarjeta de crédito? Usa "Pagar tarjeta" en Cuentas o en Deudas.'));
+        filas.push(h('p', { class: 'field__hint' }, 'Si transfieres más de lo que la app tiene registrado en la cuenta de origen, te avisamos antes de guardar y puedes continuar.')); // RU-03
+      }
     } else if (est.tipo === 'pagoDeuda') {
       if (!editando || origenProgramado) {
         filas.push(segmentado({ etiqueta: 'Tipo de pago', valor: est.modo, opciones: [{ valor: 'cuota', titulo: 'Cuota' }, { valor: 'abono', titulo: 'Abono extra' }], alCambiar: (v) => { est.modo = v; est.interesManual = false; est.interes = interesSugerido(est, datos(), hoy); completar(est, datos(), hoy, prefs); dibujarCampos(); } })); // R2F-07: al cambiar de cuota a abono el interés propuesto se recalcula (abono: 0)
@@ -270,7 +325,11 @@ export function abrirFormulario(ctx, opciones = {}) {
       filas.push(fila('Deuda y cuenta', [origenProgramado || est.origen ? chip(nombreDeuda(est.deudaId), { icono: 'deuda' }) : chip(nombreDeuda(est.deudaId), { icono: 'deuda', fin: 'chevron-down', onClick: elegirDeuda }), chipCuenta('cuentaId', 'Desde', { sinCredito: true })]));
       filas.push(fila('Interés, fecha y nota', [interesChip, chipFecha(), chipNota()]));
     } else if (est.tipo === 'aporteMeta' || est.tipo === 'retiroMeta') {
-      filas.push(fila('Meta y cuentas', [chip(nombreMeta(est.metaId), { icono: 'escudo', fin: 'chevron-down', onClick: elegirMeta }), chipCuenta('cuentaId', est.tipo === 'aporteMeta' ? 'Desde' : 'De', { sinCredito: true })]));
+      const metaElegida = d.metas.find((m) => m.id === est.metaId);
+      if (!d.metas.some(noArchivada)) {
+        filas.push(h('div', { class: 'callout callout--accent' }, icono('info'), h('div', null, h('span', { class: 'callout__title' }, 'Aún no tienes metas de ahorro'), h('br'), 'Crea una (Viaje, Vehículo, Fondo de emergencia…) para poder aportarle.'), h('button', { class: 'btn btn--secondary btn--sm callout__action', type: 'button', on: { click: () => { hoja.cerrar(); location.hash = '#/metas'; } } }, 'Crear meta')));
+      }
+      filas.push(fila('Meta y cuentas', [chip(nombreMeta(est.metaId), { icono: metaElegida?.icono ?? 'escudo', fin: 'chevron-down', onClick: elegirMeta, etiqueta: `Meta: ${nombreMeta(est.metaId)}` }), chipCuenta('cuentaId', est.tipo === 'aporteMeta' ? 'Desde' : 'De', { sinCredito: true })]));
       filas.push(fila('Destino del dinero', [chip(est.cuentaDestinoId ? `Mover a ${cuentaNombre(est.cuentaDestinoId)}` : 'Solo apartar (misma cuenta)', { icono: 'swap', fin: 'chevron-down', onClick: () => elegirCuenta('cuentaDestinoId', { sinCredito: true, titulo: 'Mover el dinero a', permitirNinguna: true }) })]));
       filas.push(fila('Fecha y nota', [chipFecha(), chipNota()]));
     } else if (est.tipo === 'ajusteCuenta' || est.tipo === 'ajusteDeuda') {
@@ -286,7 +345,7 @@ export function abrirFormulario(ctx, opciones = {}) {
   function dibujarTipo() {
     zonaTipo.replaceChildren();
     if (!tiposVisibles) return;
-    const nombres = { gasto: 'Gasto', ingreso: 'Ingreso', transferencia: 'Transferencia' };
+    const nombres = { gasto: 'Gasto', ingreso: 'Ingreso', transferencia: 'Transferencia', aporteMeta: 'Ahorro' };
     zonaTipo.append(segmentado({ etiqueta: 'Tipo de movimiento', valor: est.tipo, opciones: tiposVisibles.map((t) => ({ valor: t, titulo: nombres[t] })), alCambiar: (t) => { est.tipo = t; est.categoriaId = null; completar(est, datos(), hoy, prefs); dibujarTipo(); dibujarCampos(); } }));
     devolverFoco();
   }
@@ -299,13 +358,42 @@ export function abrirFormulario(ctx, opciones = {}) {
     guardando = true;
     btnGuardar.disabled = true;
     let guardado = false;
-    try { guardado = intentarGuardar(); } finally { if (!guardado) { guardando = false; btnGuardar.disabled = false; } }
+    try {
+      // RU-03 / RU-04: una transferencia, un aporte que mueve dinero o un pago de deuda que deja una cuenta en negativo NO se bloquea: se pregunta
+      // antes de guardar ("Esta cuenta quedará en −$ X (hoy tiene $ Y). ¿Continuar?"). "Cancelar" vuelve a la hoja con todo como estaba.
+      if (revisarCampos()) {
+        const avisos = avisosPrevios();
+        if (avisos.length && !(await confirmarSaldoNegativo(avisos, hoy))) return;
+      }
+      guardado = intentarGuardar();
+    } finally { if (!guardado) { guardando = false; btnGuardar.disabled = false; } }
+  }
+
+  /** Tipos de movimiento cuyo guardado se revisa contra el saldo (los gastos no: la app permite registrar un gasto aunque el saldo no esté al día). */
+  const TIPOS_CON_AVISO_DE_SALDO = ['transferencia', 'aporteMeta', 'retiroMeta', 'pagoDeuda'];
+
+  /** Cuentas que quedarían en negativo con lo que está por guardarse (vacío si ninguna o si el tipo no se revisa). */
+  function avisosPrevios() {
+    try {
+      const m = movimientoDesdeEstado(est, ctx);
+      if (editando) {
+        const revisa = TIPOS_CON_AVISO_DE_SALDO.includes(editando.tipo) || TIPOS_CON_AVISO_DE_SALDO.includes(est.tipo) || editando.tipo === 'ingreso' || editando.tipo === 'ajusteCuenta';
+        return revisa ? avisosDeSaldo(datos(), { editar: { ...m, id: editando.id } }, hoy) : [];
+      }
+      return TIPOS_CON_AVISO_DE_SALDO.includes(est.tipo) ? avisosDeSaldo(datos(), { agregar: m }, hoy) : [];
+    } catch { return []; } // si el cambio no es válido, lo dirá la acción al guardar
+  }
+
+  /** Revisa lo mínimo antes de guardar (monto y cuentas de una transferencia). Muestra el aviso y devuelve false si falta algo. */
+  function revisarCampos() {
+    if (!est.monto) { haptic('error', valorEl); mostrarAviso('Escribe un monto', { tipo: 'warn' }); return false; }
+    if (est.tipo === 'transferencia' && (!est.cuentaId || !est.cuentaDestinoId)) { haptic('error'); mostrarAviso('Elige la cuenta de origen y la de destino (agrega otra cuenta si solo tienes una)', { tipo: 'warn' }); return false; } // R1F-21b: antes decía "La cuenta no existe"
+    return true;
   }
 
   /** Devuelve true si el movimiento se guardó (la hoja se está cerrando). */
   function intentarGuardar() {
-    if (!est.monto) { haptic('error', valorEl); mostrarAviso('Escribe un monto', { tipo: 'warn' }); return false; }
-    if (est.tipo === 'transferencia' && (!est.cuentaId || !est.cuentaDestinoId)) { haptic('error'); mostrarAviso('Elige la cuenta de origen y la de destino (agrega otra cuenta si solo tienes una)', { tipo: 'warn' }); return false; } // R1F-21b: antes decía "La cuenta no existe"
+    if (!revisarCampos()) return false;
     let r;
     const usaOrigen = origenProgramado && est.origen && !(est.tipo === 'pagoDeuda' && est.modo === 'abono');
     if (usaOrigen) {
@@ -334,7 +422,13 @@ export function abrirFormulario(ctx, opciones = {}) {
   async function eliminar() {
     if (eliminando) return;
     eliminando = true;
-    const ok = await confirmar({ titulo: '¿Eliminar este movimiento?', mensaje: editando.origen ? 'El pago programado volverá a aparecer como pendiente.' : 'Cambiará el saldo de sus cuentas y el presupuesto del ciclo.', confirmar: 'Eliminar', peligro: true });
+    // RU-04: borrar el ingreso que financió una transferencia (o una transferencia que cubría una cuenta) puede dejar una cuenta en negativo: se avisa antes de confirmar.
+    let avisoSaldo = [];
+    try { avisoSaldo = avisosDeSaldo(datos(), { borrar: editando.id }, hoy); } catch { avisoSaldo = []; }
+    const textoSaldo = avisoSaldo.length ? ` ${avisoSaldo.length === 1 ? 'Esta cuenta quedará en negativo' : 'Estas cuentas quedarán en negativo'}: ${frasesDeAvisoSaldo(avisoSaldo, hoy).join('; ')}.` : '';
+    // R-FIN-01: si el borrado deja una cuenta en negativo es una confirmación de riesgo: "Eliminar" arranca deshabilitado un instante (un segundo toque lento sobre el botón no la confirma).
+    const pregunta = { titulo: '¿Eliminar este movimiento?', mensaje: (editando.origen ? 'El pago programado volverá a aparecer como pendiente.' : 'Cambiará el saldo de sus cuentas y el presupuesto del ciclo.') + textoSaldo, confirmar: 'Eliminar', peligro: true };
+    const ok = await (avisoSaldo.length ? confirmarRiesgo(pregunta) : confirmar(pregunta));
     if (!ok) { eliminando = false; return; }
     const previo = editando;
     const r = ejecutar(ctx, borrarMovimiento, { id: previo.id });

@@ -137,6 +137,7 @@ function dibujar(ctx, estado, redibujar) {
         h('div', { class: 'fact' }, h('span', { class: 'fact__l' }, k === 'ahorro' ? 'Aportado' : 'Gastado'), h('span', { class: 'fact__v' }, pesos(gr.ejecutado))),
         h('div', { class: 'fact' }, h('span', { class: 'fact__l' }, 'Restante'), h('span', { class: 'fact__v' }, pesos(gr.restante)))),
       k === 'ahorro' && res.interesAbono > 0 ? h('p', { class: 't-caption', style: { marginBottom: 'var(--sp-2)' } }, `Aportado = aportes a metas + capital del abono extra. Los ${pesos(res.interesAbono)} de intereses del abono cuentan como consumo (en Pago de deudas), no como ahorro.`) : null,
+      k === 'ahorro' && gr.consumoPropias > 0 ? h('p', { class: 't-caption', style: { marginBottom: 'var(--sp-2)' } }, `Además gastaste ${pesos(gr.consumoPropias)} en categorías de ahorro propias: cuenta como gasto (baja la tasa de ahorro) y no como ahorro aportado. Su barra muestra lo gastado de lo que le asignaste.`) : null,
       lineas.map((l) => {
         const c = l.categoria;
         const pctTexto = l.fraccion === Infinity ? '—' : `${Math.round(l.fraccion * 100)} %`;

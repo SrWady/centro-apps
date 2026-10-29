@@ -158,6 +158,8 @@ function dibujar(ctx, vistaEstado) {
     h('span', { class: 'legend__swatch' }),
     h('span', { class: 'legend__name' }, GRUPOS_TITULO[k], h('span', { class: 'legend__meta' }, `meta ${g[k].meta} % · plan ${porcentaje(g[k].asignadoPct)}`)),
     h('span', { class: 'legend__pct' }, porcentaje(g[k].ejecutadoPct))));
+  const propias = g.ahorro.consumoPropias; // RU-02: gasto en categorías de ahorro propias: consumo, no ahorro
+  if (propias > 0) filasLeyenda.push(h('div', { class: 'legend__row', role: 'listitem', style: { '--sw': 'var(--series-muted)' } }, h('span', { class: 'legend__swatch' }), h('span', { class: 'legend__name' }, 'Gastado en categorías de ahorro', h('span', { class: 'legend__meta' }, 'cuenta como gasto, no como ahorro')), h('span', { class: 'legend__pct' }, porcentaje(frac(propias)))));
   filasLeyenda.push(h('div', { class: 'legend__row', role: 'listitem', style: { '--sw': 'var(--cat-free)' } }, h('span', { class: 'legend__swatch' }), h('span', { class: 'legend__name' }, 'Sin ejecutar', h('span', { class: 'legend__meta' }, 'del ingreso del ciclo')), h('span', { class: 'legend__pct' }, base > 0 ? porcentaje(frac(sinEjecutar)) : '—')));
   const etiquetaDona = `Real sobre el ingreso: necesidades ${porcentaje(g.necesidades.ejecutadoPct)}, gustos ${porcentaje(g.gustos.ejecutadoPct)}, ahorro ${porcentaje(g.ahorro.ejecutadoPct)}, sin ejecutar ${base > 0 ? porcentaje(frac(sinEjecutar)) : '—'}. Meta: ${g.necesidades.meta} %, ${g.gustos.meta} %, ${g.ahorro.meta} %.`;
   const valores = (k) => Math.max(g[k].ejecutado, 0);
@@ -168,7 +170,7 @@ function dibujar(ctx, vistaEstado) {
         tam: 184, hueco: 3, etiqueta: etiquetaDona,
         centro: h('span', null, h('span', { class: 'ring__value num', style: { fontSize: 'var(--fs-sm)', display: 'block' } }, pesos(res.totalEjecutado)), h('span', { class: 'ring__label' }, 'ejecutado')),
         anillos: [
-          { trazo: 22, segmentos: [{ valor: valores('necesidades'), color: GRUPOS_COLOR.necesidades, etiqueta: `Necesidades real ${porcentaje(g.necesidades.ejecutadoPct)}` }, { valor: valores('gustos'), color: GRUPOS_COLOR.gustos, etiqueta: `Gustos real ${porcentaje(g.gustos.ejecutadoPct)}` }, { valor: valores('ahorro'), color: GRUPOS_COLOR.ahorro, etiqueta: `Ahorro real ${porcentaje(g.ahorro.ejecutadoPct)}` }, { valor: Math.max(sinEjecutar, res.totalEjecutado === 0 ? 1 : 0), color: 'var(--cat-free)', etiqueta: 'Sin ejecutar' }] },
+          { trazo: 22, segmentos: [{ valor: valores('necesidades'), color: GRUPOS_COLOR.necesidades, etiqueta: `Necesidades real ${porcentaje(g.necesidades.ejecutadoPct)}` }, { valor: valores('gustos'), color: GRUPOS_COLOR.gustos, etiqueta: `Gustos real ${porcentaje(g.gustos.ejecutadoPct)}` }, { valor: valores('ahorro'), color: GRUPOS_COLOR.ahorro, etiqueta: `Ahorro real ${porcentaje(g.ahorro.ejecutadoPct)}` }, ...(propias > 0 ? [{ valor: propias, color: 'var(--series-muted)', etiqueta: `Gastado en categorías de ahorro ${porcentaje(frac(propias))}` }] : []), { valor: Math.max(sinEjecutar, res.totalEjecutado === 0 ? 1 : 0), color: 'var(--cat-free)', etiqueta: 'Sin ejecutar' }] },
           { trazo: 9, segmentos: ['necesidades', 'gustos', 'ahorro'].map((k) => ({ valor: g[k].meta, color: GRUPOS_COLOR[k], etiqueta: `${GRUPOS_TITULO[k]} meta ${g[k].meta} %` })) },
         ],
       }),
@@ -196,7 +198,7 @@ function dibujar(ctx, vistaEstado) {
   // --- Resumen ---
   nodos.push(h('section', { class: 'grid-3', aria: { label: 'Resumen del ciclo' } },
     h('div', { class: 'card card--tight' }, h('div', { class: 'kpi' }, h('span', { class: 'kpi__v num ok' }, pesos(res.ingresoReal)), h('span', { class: 'kpi__l' }, 'Ingresos'))),
-    h('div', { class: 'card card--tight' }, h('div', { class: 'kpi' }, h('span', { class: 'kpi__v num' }, pesos(g.necesidades.ejecutado + g.gustos.ejecutado)), h('span', { class: 'kpi__l' }, 'Gastado'))),
+    h('div', { class: 'card card--tight' }, h('div', { class: 'kpi' }, h('span', { class: 'kpi__v num' }, pesos(res.gastado)), h('span', { class: 'kpi__l' }, 'Gastado'))),
     h('div', { class: 'card card--tight' }, h('div', { class: 'kpi' }, h('span', { class: 'kpi__v num' }, pesos(g.ahorro.ejecutado)), h('span', { class: 'kpi__l' }, 'Ahorrado')))));
   return nodos;
 }

@@ -3,7 +3,7 @@
  * Búsqueda: texto (nota, categoría, cuenta, deuda, meta o monto) sobre TODOS los ciclos; sin texto, el ciclo elegido.
  * Listas largas: se muestran de 60 en 60 días ("Ver más") para no crear miles de nodos.
  */
-import { h, icono, pesos, fechaCorta, nombreCiclo, estadoVacio, abrirSelector, capitalizar, GRUPOS_COLOR } from './comun.js';
+import { h, icono, pesos, fechaCorta, nombreCiclo, estadoVacio, abrirSelector, capitalizar, GRUPOS_COLOR, cuentasPorTipo, TIPOS_CUENTA_INFO } from './comun.js';
 import { vaciar } from '../../shared/lib/dom.js';
 import { esCicloId } from '../../shared/lib/validacion.js';
 import { cicloAnterior, cicloSiguiente, rangoCiclo } from '../../shared/lib/ciclos.js';
@@ -22,6 +22,8 @@ export function montar(raiz, ctx) {
   const cicloParam = params.get('ciclo');
   if (esCicloId(cicloParam) && cicloParam >= datos0.ajustes.cicloInicial) estado.ciclo = cicloParam;
   const catParam = params.get('cat');
+  const cuentaParam = params.get('cuenta'); // Ronda del usuario B: "Ver movimientos" de una cuenta o tarjeta filtra por ese método de pago
+  if (cuentaParam && datos0.cuentas.some((c) => c.id === cuentaParam)) estado.cuentaId = cuentaParam;
   if (catParam && datos0.categorias.some((c) => c.id === catParam)) estado.categoriaId = catParam;
 
   const entrada = h('input', { type: 'search', placeholder: 'Buscar movimientos', attrs: { 'aria-label': 'Buscar movimientos', autocomplete: 'off' } });
@@ -77,7 +79,11 @@ export function montar(raiz, ctx) {
     let lista = datos.movimientos.filter((m) => buscando || (m.fecha >= rango.inicio && m.fecha <= rango.fin));
     if (estado.tipo !== 'todos') lista = lista.filter((m) => m.tipo === estado.tipo);
     if (estado.categoriaId) lista = lista.filter((m) => m.categoriaId === estado.categoriaId);
-    if (estado.cuentaId) lista = lista.filter((m) => m.cuentaId === estado.cuentaId || m.cuentaDestinoId === estado.cuentaId);
+    if (estado.cuentaId) {
+      // Una tarjeta de crédito también muestra los pagos y ajustes de su deuda (una sola entidad: deuda + cuenta vinculada).
+      const deudaDeTarjeta = datos.cuentas.find((c) => c.id === estado.cuentaId && c.tipo === 'credito')?.deudaId ?? null;
+      lista = lista.filter((m) => m.cuentaId === estado.cuentaId || m.cuentaDestinoId === estado.cuentaId || (deudaDeTarjeta !== null && m.deudaId === deudaDeTarjeta));
+    }
     const descritos = lista.map((m) => ({ m, d: descripcion(m, n) }));
     const filtrados = buscando ? descritos.filter(({ m, d }) => textoBusqueda(m, n, d).replace(/\./g, '').includes(consulta)) : descritos;
     filtrados.sort((a, b) => (a.m.fecha === b.m.fecha ? (a.m.creadoEn < b.m.creadoEn ? 1 : -1) : a.m.fecha < b.m.fecha ? 1 : -1));
@@ -96,9 +102,9 @@ export function montar(raiz, ctx) {
           if (v !== undefined) { estado.categoriaId = v || null; dibujar(); }
         } } }, icono('otro'), catSel ? catSel.nombre : 'Categoría', icono('chevron-down')),
         h('button', { class: 'chip', type: 'button', aria: { pressed: String(!!ctaSel) }, on: { click: async () => {
-          const v = await abrirSelector({ titulo: 'Filtrar por cuenta', seleccionado: estado.cuentaId ?? '', opciones: [{ valor: '', titulo: 'Todas las cuentas' }, ...datos.cuentas.map((c) => ({ valor: c.id, titulo: c.nombre, icono: c.icono }))] });
+          const v = await abrirSelector({ titulo: 'Filtrar por cuenta o método de pago', seleccionado: estado.cuentaId ?? '', opciones: [{ valor: '', titulo: 'Todas las cuentas y métodos' }, ...cuentasPorTipo(datos.cuentas).map((c) => ({ valor: c.id, titulo: c.nombre + (c.archivada ? ' (archivada)' : ''), icono: c.icono, color: c.color, grupo: TIPOS_CUENTA_INFO[c.tipo]?.grupo }))] });
           if (v !== undefined) { estado.cuentaId = v || null; dibujar(); }
-        } } }, icono('wallet'), ctaSel ? ctaSel : 'Cuenta', icono('chevron-down'))),
+        } } }, icono('wallet'), ctaSel ? ctaSel : 'Cuenta o método', icono('chevron-down'))),
       h('div', { class: 'split' },
         buscando
           ? h('span', { class: 't-small muted' }, `${filtrados.length} ${filtrados.length === 1 ? 'resultado' : 'resultados'} en todos los ciclos`)

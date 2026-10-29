@@ -10,7 +10,7 @@ import { formatearNumero, formatearPorcentaje } from '../../shared/lib/numeros.j
 import { formatearFecha } from '../../shared/lib/fechas.js';
 import { etiquetaCiclo, inicioCiclo } from '../../shared/lib/ciclos.js';
 import { icono } from '../../shared/ui/icono.js';
-import { abrirHoja } from '../../shared/ui/hoja.js';
+import { abrirHoja, confirmar } from '../../shared/ui/hoja.js';
 import { mostrarAviso } from '../../shared/ui/aviso.js';
 import { haptic } from '../../shared/ui/haptica.js';
 import { crearTeclado, formatoTecleado } from '../../shared/ui/teclado.js';
@@ -37,6 +37,137 @@ export const GRUPOS_COLOR = { necesidades: 'var(--cat-needs)', gustos: 'var(--ca
 
 /** Plural simple: (3, 'mes', 'meses') → '3 meses'. */
 export const cantidad = (n, uno, varios) => `${n} ${n === 1 ? uno : varios}`;
+
+/**
+ * Ronda del usuario B: cada cuenta es un método de pago. Tipos de cuenta en el orden en que se agrupan en los selectores:
+ * `titulo` = nombre del tipo al crear; `grupo` = encabezado en los selectores; `icono` = ícono por omisión (claves del catálogo de shared/ui).
+ */
+export const ORDEN_TIPOS_CUENTA = Object.freeze(['efectivo', 'ahorro', 'banco', 'billetera', 'credito']);
+export const TIPOS_CUENTA_INFO = Object.freeze({
+  efectivo: { titulo: 'Efectivo', corto: 'Efectivo', grupo: 'Efectivo', icono: 'efectivo', ejemplo: 'Ej.: Efectivo o Alcancía', ayuda: 'Billetes y monedas.' },
+  ahorro: { titulo: 'Cuenta de ahorros', corto: 'Ahorro', grupo: 'Cuentas de ahorros', icono: 'ahorro', ejemplo: 'Ej.: Ahorros', ayuda: 'Para guardar dinero.' },
+  banco: { titulo: 'Cuenta corriente o débito', corto: 'Banco', grupo: 'Corriente y débito', icono: 'banco', ejemplo: 'Ej.: Cuenta principal', ayuda: 'La que usas con tarjeta débito.' },
+  billetera: { titulo: 'Billetera digital', corto: 'Billetera', grupo: 'Billeteras digitales', icono: 'celular', ejemplo: 'Ej.: Nequi o Daviplata', ayuda: 'Nequi, Daviplata y similares.' },
+  credito: { titulo: 'Tarjeta de crédito', corto: 'Crédito', grupo: 'Tarjetas de crédito', icono: 'tarjeta', ejemplo: 'Ej.: Tarjeta Visa', ayuda: 'Crea su deuda y su cuenta juntas.' },
+});
+export const tipoCuentaTexto = (tipo) => TIPOS_CUENTA_INFO[tipo]?.titulo ?? 'Cuenta';
+/** Nombre corto del tipo (el de las filas de la pantalla Cuentas: "Banco · saldo calculado"). */
+export const tipoCuentaCorto = (tipo) => TIPOS_CUENTA_INFO[tipo]?.corto ?? 'Cuenta';
+/** Íconos que se pueden elegir para una cuenta (todos del catálogo de shared/ui/iconos.js). */
+export const ICONOS_CUENTA = Object.freeze(['banco', 'efectivo', 'ahorro', 'celular', 'escudo', 'hogar', 'viaje', 'compras', 'regalo', 'otro']);
+/** Paleta opcional de una cuenta (claves de `COLORES_CUENTA` en logica/esquema.js; el valor visible vive aquí). */
+export const COLORES_CUENTA_CSS = Object.freeze({ azul: '#3b82f6', verde: '#16a34a', naranja: '#f97316', rojo: '#dc2626', morado: '#8b5cf6', rosa: '#ec4899', turquesa: '#14b8a6', gris: '#6b7280' });
+/** Estilo del círculo de un ícono teñido con el color de la cuenta (o undefined si no tiene color). */
+export function estiloIconoColor(clave) {
+  const c = COLORES_CUENTA_CSS[clave];
+  return c ? { background: `${c}2e`, color: c } : undefined;
+}
+/** Cuentas activas ordenadas por tipo (en `ORDEN_TIPOS_CUENTA`) y luego por `orden`. */
+export function cuentasPorTipo(cuentas) {
+  return [...cuentas].sort((a, b) => ORDEN_TIPOS_CUENTA.indexOf(a.tipo) - ORDEN_TIPOS_CUENTA.indexOf(b.tipo) || a.orden - b.orden);
+}
+
+/**
+ * Hoja con un mensaje y varios botones (más de dos salidas, que `confirmar` no ofrece). opciones: [{ valor, texto, icono?, clase? }].
+ * Devuelve Promise<valor | undefined> (undefined = cerrada o cancelada).
+ */
+export function elegirOpcion({ titulo, mensaje, opciones, cancelar = 'Cancelar' }) {
+  return new Promise((resolver) => {
+    let elegido;
+    const botones = opciones.map((o) => boton(o.texto, { icono: o.icono, clase: `btn--block ${o.clase ?? 'btn--secondary'}`, onClick: () => { elegido = o.valor; hoja.cerrar(); } }));
+    const cuerpo = h('div', { class: 'sheet__body stack' },
+      ...[].concat(mensaje ?? []).map((p) => h('p', { class: 't-small' }, p)),
+      h('div', { class: 'stack stack--sm' }, botones),
+      boton(cancelar, { clase: 'btn--ghost btn--block', onClick: () => hoja.cerrar() }));
+    const hoja = abrirHoja([cuerpo], { titulo, alCerrar: () => resolver(elegido) });
+  });
+}
+
+/**
+ * RU-03 / RU-04: texto de un aviso de saldo (logica/acciones.js `avisosDeSaldo`): "<Cuenta> quedará en −$ X (hoy tiene $ Y)". Si el punto más bajo
+ * cae otro día (un movimiento con fecha anterior o futura), lo dice ("el 6 nov").
+ */
+export function frasesDeAvisoSaldo(avisos, hoy) {
+  return avisos.map((a) => `${a.cuenta.nombre} quedará en ${pesos(a.queda)}${a.fecha !== hoy ? ` el ${diaMes(a.fecha)}` : ''} (hoy tiene ${pesos(a.saldoHoy)})`);
+}
+
+/**
+ * RU-03: hoja de confirmación antes de guardar un movimiento que deja una o más cuentas en negativo. NO bloquea: "Cancelar" vuelve a la hoja y
+ * "Continuar" sigue. Con una sola cuenta el mensaje es "Esta cuenta quedará en −$ X (hoy tiene $ Y). ¿Continuar?" y el título lleva su nombre.
+ * Devuelve Promise<boolean> (true = continuar; también false si no hay avisos que confirmar → el llamador no debe llamarla sin avisos).
+ */
+export function confirmarSaldoNegativo(avisos, hoy) {
+  const uno = avisos.length === 1 ? avisos[0] : null;
+  const mensaje = uno
+    ? `Esta cuenta quedará en ${pesos(uno.queda)}${uno.fecha !== hoy ? ` el ${diaMes(uno.fecha)}` : ''} (hoy tiene ${pesos(uno.saldoHoy)}). ¿Continuar?`
+    : `${frasesDeAvisoSaldo(avisos, hoy).join('. ')}. ¿Continuar?`;
+  return confirmarRiesgo({ titulo: uno ? `${uno.cuenta.nombre} quedará en negativo` : 'Estas cuentas quedarán en negativo', mensaje, confirmar: 'Continuar', cancelar: 'Cancelar' });
+}
+
+/**
+ * R-FIN-01: tiempo que el botón de confirmar de una confirmación de RIESGO arranca deshabilitado. La hoja de confirmación se abre justo encima del
+ * botón "Guardar"/"Eliminar" que la abrió: un segundo toque "humano" (≥ ~230 ms tras el primero) cae en "Continuar" y confirmaba sin que se leyera.
+ */
+export const RETARDO_CONFIRMAR_RIESGO_MS = 700;
+
+/**
+ * Como `confirmar` (shared/ui/hoja.js, que no se toca) pero para confirmaciones de riesgo (sobregiro, mover o borrar con efecto en saldos): el botón de
+ * confirmar nace deshabilitado (`aria-disabled="true"`, atenuado por `.btn[aria-disabled]`) durante `retardo` ms y se habilita solo con un temporizador
+ * que se limpia al responder y al cerrarse la hoja (Esc, fondo, arrastre), y la hoja se abre con el foco en "Cancelar", que NUNCA se deshabilita.
+ * El estado cambia sin animación (cumple `prefers-reduced-motion`). `retardo` 0 = sin espera (solo para pruebas).
+ * @param {{titulo?:string, mensaje?:string, confirmar?:string, cancelar?:string, peligro?:boolean}} o
+ * @returns {Promise<boolean>}
+ */
+export function confirmarRiesgo(o = {}, retardo = RETARDO_CONFIRMAR_RIESGO_MS) {
+  return new Promise((resolver) => {
+    let respondido = false;
+    let temporizador = null;
+    let esperando = retardo > 0;
+    const detener = () => { if (temporizador !== null) { clearTimeout(temporizador); temporizador = null; } };
+    const responder = (v) => { if (respondido) return; respondido = true; detener(); resolver(v); hoja.cerrar(v); };
+    const btnCancelar = h('button', { class: 'btn btn--secondary js-cancelar-riesgo', type: 'button', on: { click: () => responder(false) } }, o.cancelar || 'Cancelar');
+    const btnConfirmar = h('button', {
+      class: 'btn' + (o.peligro ? ' btn--danger' : ''), type: 'button', aria: esperando ? { disabled: 'true' } : undefined,
+      on: { click: () => { if (esperando) return; responder(true); } },
+    }, o.confirmar || 'Confirmar');
+    const cuerpo = h('div', { class: 'sheet__body stack' }, o.mensaje ? h('p', { class: 'muted' }, o.mensaje) : null);
+    const pie = h('div', { class: 'sheet__foot' }, btnCancelar, btnConfirmar);
+    const hoja = abrirHoja([cuerpo, pie], {
+      titulo: o.titulo || 'Confirmar', enfocar: '.js-cancelar-riesgo',
+      alCerrar: () => { detener(); if (!respondido) { respondido = true; resolver(false); } },
+    });
+    const cerrarHoja = hoja.cerrar;
+    hoja.cerrar = (v) => { detener(); cerrarHoja(v); }; // Esc, fondo, arrastre o botón: el temporizador se limpia en cuanto empieza a cerrarse
+    if (esperando) {
+      temporizador = setTimeout(() => { temporizador = null; esperando = false; btnConfirmar.removeAttribute('aria-disabled'); }, retardo);
+    }
+  });
+}
+
+/**
+ * Rótulos de los íconos del catálogo (shared/ui/iconos.js trae solo las claves, sin tilde: "educacion"). Mapa LOCAL de Finanzas para que el selector
+ * diga "Educación" (R-USR: observación N6-03); una clave sin rótulo se capitaliza.
+ */
+export const ROTULOS_ICONO = Object.freeze({
+  hogar: 'Hogar', servicios: 'Servicios', celular: 'Celular', mercado: 'Mercado', transporte: 'Transporte', educacion: 'Educación', comida: 'Comida', ocio: 'Ocio',
+  compras: 'Compras', suscripciones: 'Suscripciones', deporte: 'Deporte', salud: 'Salud', viaje: 'Viaje', regalo: 'Regalo', deuda: 'Deuda', ahorro: 'Ahorro',
+  escudo: 'Escudo', ingreso: 'Ingreso', otro: 'Otro', banco: 'Banco', efectivo: 'Efectivo', tarjeta: 'Tarjeta',
+});
+export const nombreIcono = (clave) => ROTULOS_ICONO[clave] ?? (clave ? clave.charAt(0).toUpperCase() + clave.slice(1) : '');
+
+/** Fila de íconos elegibles (radiogroup de chips). alCambiar(clave). Devuelve el nodo; el llamador lo vuelve a pintar al cambiar. */
+export function selectorDeIcono({ etiqueta = 'Ícono', valor, claves = ICONOS_CUENTA, alCambiar, nombres = {} }) {
+  return h('div', { class: 'chip-row chip-row--wrap', role: 'radiogroup', aria: { label: etiqueta } },
+    claves.map((k) => h('button', { class: 'chip', type: 'button', role: 'radio', aria: { checked: String(k === valor), pressed: String(k === valor), label: nombres[k] ?? k }, on: { click: () => alCambiar(k) } }, icono(k))));
+}
+
+/** Fila de colores elegibles (con "sin color"). alCambiar(clave | null). */
+export function selectorDeColor({ etiqueta = 'Color', valor, alCambiar }) {
+  const punto = (hex) => h('span', { style: { display: 'inline-block', width: '18px', height: '18px', borderRadius: '50%', background: hex || 'transparent', border: hex ? '0' : '2px dashed var(--text-3)', boxSizing: 'border-box' }, aria: { hidden: 'true' } });
+  return h('div', { class: 'chip-row chip-row--wrap', role: 'radiogroup', aria: { label: etiqueta } },
+    h('button', { class: 'chip', type: 'button', role: 'radio', aria: { checked: String(!valor), pressed: String(!valor), label: 'Sin color' }, on: { click: () => alCambiar(null) } }, punto(null)),
+    Object.entries(COLORES_CUENTA_CSS).map(([k, hex]) => h('button', { class: 'chip', type: 'button', role: 'radio', aria: { checked: String(k === valor), pressed: String(k === valor), label: k.charAt(0).toUpperCase() + k.slice(1) }, on: { click: () => alCambiar(k) } }, punto(hex))));
+}
 
 /** Barra de progreso accesible. fraccion 0..1 (se recorta); clase: '' | 'warn' | 'danger' | 'ok'. */
 export function barra({ fraccion, clase = '', etiqueta, grande = false }) {
@@ -84,11 +215,18 @@ export function ejecutar(ctx, accion, payload, { exito, deshacer, tipoAviso = 'o
 export function abrirSelector({ titulo, opciones, seleccionado, vacio = 'No hay opciones.' }) {
   return new Promise((resolver) => {
     let elegido;
+    // Ronda del usuario B: `grupo` (texto) agrupa las opciones consecutivas bajo un encabezado (p. ej. las cuentas por tipo); `color` tiñe el ícono.
     const fila = (o) => h('button', { class: 'item', type: 'button', aria: { pressed: String(o.valor === seleccionado) }, on: { click: () => { elegido = o.valor; hoja.cerrar(); } } },
-      o.icono ? h('span', { class: 'item__icon' }, icono(o.icono)) : null,
+      o.icono ? h('span', { class: 'item__icon', style: o.color ? estiloIconoColor(o.color) : undefined }, icono(o.icono)) : null,
       h('span', { class: 'item__main' }, h('span', { class: 'item__title', style: { display: 'block' } }, o.titulo), o.sub ? h('span', { class: 'item__sub', style: { display: 'block' } }, o.sub) : null),
       o.valor === seleccionado ? h('span', { class: 'accent' }, icono('check')) : (o.fin ? h('span', { class: 'item__end money' }, o.fin) : null));
-    const cuerpo = h('div', { class: 'sheet__body' }, opciones.length ? h('div', { class: 'list' }, opciones.map(fila)) : estadoVacio({ titulo: vacio }));
+    const filas = [];
+    let grupoActual = null;
+    for (const o of opciones) {
+      if (o.grupo && o.grupo !== grupoActual) { grupoActual = o.grupo; filas.push(h('div', { class: 't-label list-title', role: 'presentation' }, o.grupo)); }
+      filas.push(fila(o));
+    }
+    const cuerpo = h('div', { class: 'sheet__body' }, opciones.length ? h('div', { class: 'list' }, filas) : estadoVacio({ titulo: vacio }));
     const hoja = abrirHoja([cuerpo], { titulo, alCerrar: () => resolver(elegido) });
   });
 }
