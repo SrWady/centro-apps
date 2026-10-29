@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="es" data-app="finanzas">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0a0c11">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Finanzas">
+<link rel="manifest" href="./manifest.webmanifest">
+<link rel="apple-touch-icon" href="./icons/apple-touch-icon-180.png">
+<link rel="icon" type="image/png" sizes="192x192" href="./icons/icon-192.png">
+<script src="./registrar-sw.js" defer></script>
+<title>Finanzas Personales</title>
+<link rel="stylesheet" href="../shared/ui/tokens.css">
+<link rel="stylesheet" href="../shared/ui/components.css">
+<link rel="stylesheet" href="../shared/ui/patrones-finanzas.css">
+<link rel="stylesheet" href="./estilos.css">
+</head>
+<body>
+<div class="app" id="app">
+  <header class="topbar">
+    <div class="topbar__titles"><h1 class="topbar__title" id="titulo-pantalla">Finanzas</h1><p class="topbar__sub" id="subtitulo-pantalla" hidden></p></div>
+  </header>
+  <div class="shell-avisos" id="avisos-globales"></div>
+  <main class="screen screen--float-pad" id="contenido" tabindex="-1"></main>
+  <div class="float-zone" id="zona-flotante" hidden></div>
+  <nav class="nav" id="navegacion" aria-label="Navegación principal"></nav>
+</div>
+<noscript><p style="padding:16px;color:#f3f5f9">Esta aplicación necesita JavaScript para funcionar.</p></noscript>
+<script type="module" src="./app.js"></script>
+</body>
+</html>

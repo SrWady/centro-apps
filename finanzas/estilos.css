@@ -1,0 +1,26 @@
+/* Estilos propios de Finanzas (consumen los tokens de shared/ui). */
+
+/* Botones que se ven como filas/alertas (el sistema de diseño define .alert y .budget-line para <a>/<div>) */
+button.alert { width: 100%; text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.item__btn { background: none; border: 0; padding: 0; margin: 0; text-align: left; color: inherit; font: inherit; min-height: var(--tap); cursor: pointer; }
+.budget-line--btn { width: 100%; background: none; border: 0; border-top: 1px solid var(--line); text-align: left; color: inherit; font: inherit; cursor: pointer; }
+.budget-line--btn:first-of-type { border-top: 0; }
+.budget-line--btn:active { background: var(--accent-soft); }
+.chip { flex: none; }
+
+/* Avisos globales bajo la barra superior (sin almacenamiento, versión futura, etc.) */
+.shell-avisos { flex: none; display: flex; flex-direction: column; gap: var(--sp-2); padding: 0 max(var(--gutter), var(--safe-right)) 0 max(var(--gutter), var(--safe-left)); }
+.shell-avisos:not(:empty) { padding-bottom: var(--sp-2); }
+
+/* Texto largo o sin espacios (notas, nombres) no debe desbordar */
+.item__title, .item__sub, .txn__title, .txn__sub, .budget-line__name, .callout { overflow-wrap: anywhere; }
+.num { white-space: nowrap; }
+
+/* Pantalla de recuperación */
+.recuperacion { display: flex; flex-direction: column; gap: var(--sp-4); }
+
+[hidden] { display: none !important; }
+
+/* Tres steppers (necesidades/gustos/ahorro): pasan a 2 filas si no caben (cada uno necesita ~130 px) */
+.grid-steppers { display: grid; grid-template-columns: repeat(auto-fit, minmax(136px, 1fr)); gap: var(--sp-3); }
+.grid-steppers > * { min-width: 0; }
