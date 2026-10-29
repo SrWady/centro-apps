@@ -1,0 +1,98 @@
+/*
+ * Estilos propios de Gimnasio. Consume los tokens y patrones de shared/ui: aquí solo van los ajustes que la app
+ * necesita sobre ellos (controles construidos con botones, estados extra de la franja, avisos permanentes).
+ */
+
+/* Avisos permanentes entre la barra superior y la pantalla */
+.avisos { flex: none; display: flex; flex-direction: column; gap: var(--sp-2); padding: 0 max(var(--gutter), var(--safe-right)) 0 max(var(--gutter), var(--safe-left)); }
+.avisos:empty { display: none; }
+.avisos .callout { margin-bottom: var(--sp-2); }
+
+/* Valor del stepper tocable (abre el teclado numérico): mantiene 44 px de alto */
+button.stepper__value { min-height: var(--tap); padding: 0 var(--sp-1); border: 0; background: none; color: var(--text); font-family: inherit; cursor: pointer; }
+button.stepper__value:active { background: var(--accent-soft); border-radius: var(--r-sm); }
+.stepper { min-width: 0; }
+.set__edit .stepper { grid-template-columns: var(--tap) minmax(44px, 1fr) var(--tap); }
+
+/* Cabecera de ejercicio que se puede tocar para abrirlo */
+.exercise__head--btn { width: 100%; border: 0; background: none; text-align: left; color: inherit; font-family: inherit; cursor: pointer; }
+.exercise__head--btn:active { background: var(--accent-soft); }
+
+/* Fila de serie: el resumen es un botón (tocar para editar) */
+button.set__sum { width: 100%; min-height: var(--tap); padding: 0; border: 0; background: none; color: inherit; font-family: inherit; text-align: left; cursor: pointer; }
+.set--done button.set__sum b { color: var(--text); }
+.set--done .set__check, .set--pending .set__check { cursor: pointer; }
+.set__check[aria-hidden="true"] { pointer-events: none; }
+
+/* Franja semanal: día no registrado y sesión en curso */
+.day--missed .day__s { border-color: var(--danger); color: var(--danger); }
+.day--missed .day__s svg { stroke-width: 3; }
+.day--active .day__s { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.day--selected { background: var(--surface-3); }
+.day--today.day--selected { background: var(--accent-soft); }
+a.day:active { background: var(--accent-soft); }
+
+/* Con la barra de descanso visible, los avisos suben para no tapar sus botones */
+body.con-descanso .toasts { bottom: calc(var(--nav-total) + 104px); }
+
+/* Descanso de la OTRA persona (un solo celular, dos personas entrenando a la vez): chip sobre la barra; tocarlo cambia de persona */
+.rest-otro {
+  align-self: stretch; display: flex; align-items: center; justify-content: center; min-height: var(--tap); padding: 0 var(--sp-3);
+  background: var(--surface-2); color: var(--text); border: 1px solid var(--line-strong); border-radius: var(--r-lg);
+  box-shadow: var(--shadow-2); font: inherit; font-size: var(--fs-sm); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; cursor: pointer;
+}
+.rest-otro--listo { border-color: var(--ok); color: var(--ok); }
+/* N3-09: un nombre largo se corta con puntos suspensivos en vez de salirse de su caja */
+.rest-otro { min-width: 0; max-width: 100%; }
+.rest-otro__txt { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.seg--persona { grid-auto-columns: minmax(0, 1fr); }
+.seg--persona > button { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* R3G-03: con un chip de descanso visible (en cualquier estado de la pantalla: plan, día completado, día de descanso) el final del
+   contenido sube por encima de él; con la barra de descanso o una sesión en curso, además el sitio de la barra. */
+body.con-descanso-otro .screen { padding-bottom: calc(var(--tap) + var(--sp-3) + var(--sp-6)); }
+body.con-descanso-otro.con-descanso-doble .screen { padding-bottom: calc(2 * (var(--tap) + var(--sp-3)) + var(--sp-6)); }
+body.con-descanso-otro .screen--float-pad { padding-bottom: calc(104px + var(--tap) + var(--sp-3)); }
+body.con-descanso-otro.con-descanso-doble .screen--float-pad { padding-bottom: calc(104px + 2 * (var(--tap) + var(--sp-3))); }
+body.con-descanso.con-descanso-otro .toasts { bottom: calc(var(--nav-total) + 104px + var(--tap) + var(--sp-3)); }
+body.con-descanso.con-descanso-doble .toasts { bottom: calc(var(--nav-total) + 104px + 2 * (var(--tap) + var(--sp-3))); }
+
+/* Descanso terminado */
+.rest--listo { border-color: var(--ok); }
+.rest--listo .rest__time { color: var(--ok); }
+.rest .btn--sm { min-width: var(--tap); }
+
+/* Selector de persona de la franja */
+.seg--persona > button { min-height: 48px; font-size: var(--fs-md); }
+
+/* Barras agrupadas (Semana y Progreso comparan personas) */
+.chart-legend .legend__swatch { display: inline-block; vertical-align: middle; margin-right: 4px; }
+.bars__rect.is-s2 { fill: var(--series-2); }
+
+/* Sesiones por día (Semana): toque abre el día */
+.daylog-fila { display: flex; align-items: center; gap: var(--sp-3); min-height: 56px; padding: 8px 0; width: 100%; border: 0; border-top: 1px solid var(--line); background: none; color: inherit; font-family: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+.daylog-fila:first-of-type { border-top: 0; }
+.daylog-fila:active { background: var(--accent-soft); }
+.estado-sesion { display: inline-flex; align-items: center; gap: 4px; }
+
+/* Rutina: la fila de ejercicio entera abre el editor */
+.routine-ex__editar { flex: none; }
+.routine-ex__ajuste { color: var(--text-2); }
+.chip-row--wrap .chip { flex: none; }
+
+/* Hoja de edición: bloques de ajustes por persona */
+.bloque-persona { border: 1px solid var(--line); border-radius: var(--r-md); padding: var(--sp-3); display: flex; flex-direction: column; gap: var(--sp-3); }
+.bloque-persona > .t-h { font-size: var(--fs-md); }
+
+/* Datos: medidor de almacenamiento */
+.medidor { margin-top: var(--sp-2); }
+
+/* Texto largo sin desbordar */
+.item__title, .item__sub, .exercise__name, .exercise__meta, .callout { overflow-wrap: anywhere; }
+
+/* Consejo técnico de cada ejercicio (F-01): una línea bajo el ejercicio, en Entrenar y en Rutina */
+.exercise__tip { margin: 0 var(--sp-4) var(--sp-2); font-size: var(--fs-sm); color: var(--text-2); line-height: 1.4; overflow-wrap: anywhere; }
+.exercise__tip b, .routine-ex__consejo b { color: var(--text); font-weight: var(--fw-semibold); }
+.routine-ex__consejo { margin-top: 2px; font-size: var(--fs-sm); color: var(--text-2); line-height: 1.4; overflow-wrap: anywhere; }
+
+/* Cuadros de texto de la hoja de copia: 16 px para que Safari iOS no haga zoom al enfocarlos (F-05) */
+textarea.input--copia { font-family: var(--font-mono); font-size: var(--fs-md); }
