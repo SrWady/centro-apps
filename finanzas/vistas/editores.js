@@ -46,20 +46,20 @@ export function abrirCategorias(ctx, alCambiar) {
 }
 
 /** Hoja de alta o edición de una categoría: nombre, grupo, ícono y monto asignado (alta). Mensajes de error junto al campo. */
-export function abrirEditorCategoria(ctx, categoria, alGuardar) {
+export function abrirEditorCategoria(ctx, categoria, alGuardar, { tipo = 'gasto', nombre: nombreInicial = '', asignacion: asignacionInicial = null } = {}) {
   const nueva = !categoria;
   // H-07: al archivar, la hoja de confirmación y el editor se cierran con ~300 ms de diferencia y el último en cerrarse devuelve el
   // foco a un botón que ya no existe: Esc dejaba de cerrar la lista de categorías. Se reasigna el foco cuando ambas ya se fueron.
   const luego = () => { alGuardar(); setTimeout(recuperarFoco, 350); };
   const datos0 = ctx.tienda.datos();
   const meta = categoria?.metaId ? datos0.metas.find((m) => m.id === categoria.metaId) : null;
-  const est = { tipo: categoria?.tipo ?? 'gasto', grupo: categoria?.grupo ?? 'gustos', icono: categoria?.icono ?? 'otro' };
-  const nombre = h('input', { class: 'input', type: 'text', value: categoria?.nombre ?? '', attrs: { maxlength: 40, 'aria-label': 'Nombre de la categoría', autocomplete: 'off', placeholder: 'Ej.: Compras' } });
+  const est = { tipo: categoria?.tipo ?? tipo, grupo: categoria?.grupo ?? 'gustos', icono: categoria?.icono ?? 'otro' };
+  const nombre = h('input', { class: 'input', type: 'text', value: categoria?.nombre ?? nombreInicial, attrs: { maxlength: 40, 'aria-label': 'Nombre de la categoría', autocomplete: 'off', placeholder: 'Ej.: Compras' } });
   const errorNombre = h('p', { class: 'field__hint danger', role: 'alert' });
   errorNombre.hidden = true;
   const decir = (texto) => { errorNombre.textContent = texto ?? ''; errorNombre.hidden = !texto; nombre.setAttribute('aria-invalid', texto ? 'true' : 'false'); if (texto) { haptic('error'); nombre.focus(); } };
   nombre.addEventListener('input', () => { if (!errorNombre.hidden) decir(''); });
-  const asignado = campoPesos({ etiqueta: 'Monto asignado por ciclo (opcional)', valor: null, id: 'c-asig', ayuda: 'Se asigna al ciclo actual y a los ciclos futuros que ya existan; los próximos lo heredan al copiarse. Puedes cambiarlo en Presupuesto.' });
+  const asignado = campoPesos({ etiqueta: 'Monto asignado por ciclo (opcional)', valor: asignacionInicial, id: 'c-asig', ayuda: 'Se asigna al ciclo actual y a los ciclos futuros que ya existan; los próximos lo heredan al copiarse. Puedes cambiarlo en Presupuesto.' });
   const zona = h('div', { class: 'stack stack--lg' });
   const chipIcono = h('button', { class: 'chip', type: 'button' });
   chipIcono.addEventListener('click', async () => {
@@ -154,6 +154,21 @@ export function abrirEditorRecurrente(ctx, rec, alGuardar) {
   const max = campoPesos({ etiqueta: 'Rango: máximo (opcional)', valor: rec?.rango?.max ?? null, id: 'r-max' });
   const dia = h('input', { class: 'input num', type: 'number', value: est.dia, attrs: { min: 1, max: 31, inputmode: 'numeric', 'aria-label': 'Día del mes' } });
   const zona = h('div', { class: 'stack stack--lg' });
+  // La categoría decide en qué línea del Presupuesto cuenta el pago; desde aquí también se puede crear una nueva (con el nombre del pago).
+  const NUEVA_CATEGORIA = '__nueva-categoria__';
+  const elegirCategoria = async () => {
+    const d = ctx.tienda.datos();
+    const opciones = d.categorias.filter((c) => c.tipo === est.tipo && c.vinculo === null && !c.archivada).map((c) => ({ valor: c.id, titulo: c.nombre, icono: c.icono }));
+    opciones.push({ valor: NUEVA_CATEGORIA, titulo: 'Nueva categoría…', sub: est.tipo === 'gasto' ? 'Tendrá su propia línea en Presupuesto' : undefined, icono: 'plus' });
+    const v = await abrirSelector({ titulo: 'Categoría', seleccionado: est.categoriaId, opciones });
+    if (!v) return;
+    if (v !== NUEVA_CATEGORIA) { est.categoriaId = v; pintar(); return; }
+    const antes = new Set(d.categorias.map((c) => c.id));
+    abrirEditorCategoria(ctx, null, () => {
+      const creada = ctx.tienda.datos().categorias.find((c) => !antes.has(c.id) && c.tipo === est.tipo);
+      if (creada) { est.categoriaId = creada.id; pintar(); }
+    }, { tipo: est.tipo, nombre: nombre.value.trim(), asignacion: est.tipo === 'gasto' ? monto.valor() : null });
+  };
   const pintar = () => {
     const d = ctx.tienda.datos();
     const cat = d.categorias.find((c) => c.id === est.categoriaId);
@@ -163,8 +178,9 @@ export function abrirEditorRecurrente(ctx, rec, alGuardar) {
     poner(zona, 
       nueva ? segmentado({ etiqueta: 'Tipo', valor: est.tipo, opciones: [{ valor: 'gasto', titulo: 'Gasto' }, { valor: 'ingreso', titulo: 'Ingreso' }], alCambiar: (v) => { est.tipo = v; est.categoriaId = null; pintar(); } }) : null,
       h('div', { class: 'chip-row', role: 'group', aria: { label: 'Categoría y cuenta' } },
-        h('button', { class: 'chip', type: 'button', on: { click: async () => { const v = await abrirSelector({ titulo: 'Categoría', seleccionado: est.categoriaId, opciones: d.categorias.filter((c) => c.tipo === est.tipo && c.vinculo === null && !c.archivada).map((c) => ({ valor: c.id, titulo: c.nombre, icono: c.icono })) }); if (v) { est.categoriaId = v; pintar(); } } } }, icono(cat2?.icono ?? 'otro'), cat2?.nombre ?? 'Categoría', icono('chevron-down')),
+        h('button', { class: 'chip', type: 'button', on: { click: elegirCategoria } }, icono(cat2?.icono ?? 'otro'), cat2?.nombre ?? 'Categoría', icono('chevron-down')),
         h('button', { class: 'chip', type: 'button', on: { click: async () => { const v = await abrirSelector({ titulo: 'Cuenta', seleccionado: est.cuentaId, opciones: d.cuentas.filter((c) => !c.archivada && (est.tipo === 'gasto' || c.tipo !== 'credito')).map((c) => ({ valor: c.id, titulo: c.nombre, icono: c.icono })) }); if (v) { est.cuentaId = v; pintar(); } } } }, icono(cta?.icono ?? 'banco'), cta?.nombre ?? 'Cuenta', icono('chevron-down'))),
+      est.tipo === 'gasto' && cat2 ? h('p', { class: 'field__hint' }, `En Presupuesto este pago cuenta dentro de «${cat2.nombre}». Si quieres una línea propia (por ejemplo «${nombre.value.trim() || 'Compras'}»), toca la categoría y elige «Nueva categoría».`) : null,
       segmentado({ etiqueta: 'Frecuencia', valor: est.frecuencia, opciones: [{ valor: 'mensual', titulo: 'Cada mes' }, { valor: 'semanal', titulo: 'Cada semana' }], alCambiar: (v) => { est.frecuencia = v; pintar(); } }),
       est.frecuencia === 'mensual'
         ? h('div', { class: 'field' }, h('label', { class: 'field__label' }, 'Día del mes (1–31)'), dia, h('span', { class: 'field__hint' }, 'Si el mes no tiene ese día, se toma el último día del mes.'))

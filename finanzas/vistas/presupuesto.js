@@ -122,6 +122,14 @@ function dibujar(ctx, estado, redibujar) {
   const alertasCfg = datos.ajustes.alertas;
   nodos.push(h('p', { class: 't-caption' }, `Alertas: aviso al pasar el ${alertasCfg.avisoPct} % de lo asignado y exceso al pasar el ${alertasCfg.excesoPct} %. Si lo ejecutado es exactamente igual a lo asignado, la línea queda en "Completo" y no genera alerta.`));
 
+  // Pagos recurrentes de gasto activos que cuentan en cada línea (se muestran aunque aún no caigan en este ciclo).
+  const recurrentesPorCategoria = new Map();
+  for (const r of datos.recurrentes) {
+    if (!r.activo || r.tipo !== 'gasto') continue;
+    if (!recurrentesPorCategoria.has(r.categoriaId)) recurrentesPorCategoria.set(r.categoriaId, []);
+    recurrentesPorCategoria.get(r.categoriaId).push(`${r.nombre} ${pesos(r.monto)} ${r.frecuencia.tipo === 'mensual' ? 'al mes' : 'por semana'}`);
+  }
+
   // Grupos
   const pd = res.pagoDeudas;
   for (const k of ORDEN) {
@@ -147,6 +155,7 @@ function dibujar(ctx, estado, redibujar) {
           esDeudas ? h('div', { class: 't-caption' }, textoPagoDeudas(pd, pesos)) : null,
           c.id === 'cat-transporte' ? h('div', { class: 't-caption' }, 'Incluye gasolina: gasto manual, cuando toque') : null,
           c.vinculo === 'abono-deudas' ? h('div', { class: 't-caption' }, 'Pagos extra a capital de tus deudas') : null,
+          recurrentesPorCategoria.has(c.id) ? h('div', { class: 't-caption' }, `Recurrentes en esta línea: ${recurrentesPorCategoria.get(c.id).join(' · ')}`) : null,
           notaInteres(l) ? h('div', { class: 't-caption' }, notaInteres(l)) : null,
           barra({ fraccion: l.fraccion === Infinity ? 1 : l.fraccion, clase: claseBarra(l), etiqueta: c.nombre }),
           h('div', { class: 'progress-label' }, h('span', null, pctTexto), h('span', null, estadoLinea(l))));
