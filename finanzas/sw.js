@@ -8,7 +8,7 @@
 'use strict';
 
 const APP = 'finanzas';
-const CACHE_VERSION = 'v2';
+const CACHE_VERSION = 'v3';
 const CACHE_PREFIX = 'cte-' + APP + '-';
 const CACHE_NAME = CACHE_PREFIX + CACHE_VERSION;
 const TIEMPO_RED_MS = 3000; // con copia en caché, si la red tarda más se usa la copia (señal débil)
